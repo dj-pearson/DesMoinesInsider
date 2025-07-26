@@ -37,21 +37,41 @@ The application follows a monorepo pattern with three main directories:
 ### Data Models
 - **Events**: Core entity with AI-enhanced descriptions, scraped from multiple sources
 - **Restaurants**: Local dining establishments with ratings and search tracking
+- **Restaurant Openings**: New restaurant tracking from local news sources
 - **Attractions**: Tourist destinations and points of interest
 - **Playgrounds**: Family-friendly locations with age-appropriate features
 - **Users**: User accounts for personalization (schema defined but not fully implemented)
 - **Newsletter**: Email subscription management
 
-### Event Enhancement Pipeline
-1. **Scraping**: Automated data collection from Google Events and Catch Des Moines
-2. **AI Enhancement**: OpenAI integration to improve event descriptions and add context
-3. **Categorization**: Automatic classification of events by type
-4. **Storage**: Persistent storage with original and enhanced content
+### Enhanced Event Pipeline
+1. **Comprehensive Scraping**: Automated data collection from multiple sources:
+   - Google Events (with direct website linking)
+   - Catch Des Moines (enhanced to extract direct event URLs)
+   - Eventbrite
+   - Music venues: Vibrant Music Hall, Hoyt Sherman Place, Val Aire Ballroom
+   - Sports teams: Iowa Wild, Iowa Wolves, Iowa Cubs, Iowa Barnstormers
+   - Iowa Events Center
+2. **Event Deduplication**: Prevents duplicate events across multiple sources
+3. **AI Enhancement**: OpenAI integration to improve event descriptions and add context
+4. **Direct Website Linking**: Links directly to event websites instead of intermediary pages
+5. **Categorization**: Automatic classification of events by type and venue
+6. **Storage**: Persistent storage with original and enhanced content
+
+### Restaurant Tracking Pipeline
+1. **News Source Monitoring**: Automated scraping from local news sources:
+   - DSM Magazine restaurant opening articles
+   - Des Moines Register dining news
+2. **Restaurant Data Extraction**: Parsing of restaurant names, cuisine types, opening dates
+3. **Status Tracking**: Classification as "opening_soon", "newly_opened", or "announced"
+4. **Source Attribution**: Links back to original news articles
 
 ### Search and Discovery Features
-- **Event Filtering**: By category, date, and location
+- **Event Filtering**: By category, date, and location across all sources
 - **Featured Events**: AI-curated selection of noteworthy events
 - **Most Searched**: Tracking popular restaurants, attractions, and playgrounds
+- **Restaurant Openings**: Latest restaurant news and opening announcements
+- **Direct Event Links**: Links directly to event websites instead of intermediary pages
+- **Event Deduplication**: Prevents duplicate events from multiple sources
 - **Newsletter Subscription**: Email updates for new events and recommendations
 
 ## Data Flow

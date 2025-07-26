@@ -1,9 +1,9 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage.js";
-import { scrapeGoogleEvents, scrapeCatchDesMoines } from "./services/scraper.js";
+import { scrapeAllSources, deduplicateEvents } from "./services/scraper.js";
 import { enhanceEvents } from "./services/eventEnhancer.js";
-import { insertNewsletterSchema } from "@shared/schema.js";
+import { insertNewsletterSchema, insertRestaurantOpeningSchema } from "@shared/schema.js";
 import cron from "node-cron";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -49,39 +49,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Scrape and enhance events endpoint
+  // Comprehensive scraping endpoint for all sources
   app.post("/api/events/scrape", async (req, res) => {
     try {
-      console.log("Starting event scraping...");
+      console.log("Starting comprehensive scraping from all sources...");
       
-      // Scrape from both sources
-      const [googleEvents, catchEvents] = await Promise.all([
-        scrapeGoogleEvents("events in Des Moines Iowa upcoming"),
-        scrapeCatchDesMoines()
-      ]);
+      // Get existing events for deduplication
+      const existingEvents = await storage.getEvents();
+      
+      // Scrape from all sources
+      const { events: newEvents, restaurants: newRestaurants } = await scrapeAllSources();
+      
+      console.log(`Scraped ${newEvents.length} new events from all sources`);
+      console.log(`Found ${newRestaurants.length} restaurant openings from news sources`);
 
-      console.log(`Scraped ${googleEvents.length} Google events, ${catchEvents.length} Catch Des Moines events`);
+      // Deduplicate events against existing ones - map existing events to match ScrapedEvent interface
+      const existingScrapedEvents = existingEvents.map(e => ({
+        title: e.title,
+        description: e.enhancedDescription || e.originalDescription || e.title,
+        date: e.date,
+        location: e.location,
+        category: e.category,
+        sourceUrl: e.sourceUrl || '',
+        imageUrl: e.imageUrl || undefined,
+        venue: e.venue || undefined,
+        price: e.price || undefined
+      }));
+      const uniqueEvents = deduplicateEvents(existingScrapedEvents, newEvents);
+      console.log(`After deduplication: ${uniqueEvents.length} unique events to add`);
 
       // Enhance events with AI
-      const [enhancedGoogleEvents, enhancedCatchEvents] = await Promise.all([
-        enhanceEvents(googleEvents, 'google'),
-        enhanceEvents(catchEvents, 'catch-des-moines')
+      const enhancedEvents = await enhanceEvents(uniqueEvents, 'comprehensive');
+
+      // Store enhanced events and restaurant openings
+      const [storedEvents, storedRestaurants] = await Promise.all([
+        storage.createEvents(enhancedEvents),
+        storage.createRestaurantOpenings(newRestaurants.map(r => ({
+          name: r.name,
+          description: r.description,
+          location: r.location,
+          cuisine: r.cuisine,
+          openingDate: r.openingDate,
+          status: r.status,
+          sourceUrl: r.sourceUrl
+        })))
       ]);
 
-      // Store enhanced events
-      const allEnhancedEvents = [...enhancedGoogleEvents, ...enhancedCatchEvents];
-      const storedEvents = await storage.createEvents(allEnhancedEvents);
-
       console.log(`Enhanced and stored ${storedEvents.length} events`);
+      console.log(`Stored ${storedRestaurants.length} restaurant openings`);
       
       res.json({
-        message: `Successfully scraped and enhanced ${storedEvents.length} events`,
-        events: storedEvents
+        message: `Successfully scraped and enhanced ${storedEvents.length} events and ${storedRestaurants.length} restaurant openings`,
+        events: storedEvents,
+        restaurants: storedRestaurants
       });
     } catch (error) {
-      console.error("Failed to scrape events:", error);
+      console.error("Failed to comprehensively scrape:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      res.status(500).json({ message: "Failed to scrape events: " + errorMessage });
+      res.status(500).json({ message: "Failed to scrape: " + errorMessage });
     }
   });
 
@@ -181,6 +206,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Restaurant Openings endpoints
+  app.get("/api/restaurant-openings", async (req, res) => {
+    try {
+      const openings = await storage.getRestaurantOpenings();
+      res.json(openings);
+    } catch (error) {
+      console.error("Failed to get restaurant openings:", error);
+      res.status(500).json({ message: "Failed to fetch restaurant openings" });
+    }
+  });
+
+  app.post("/api/restaurant-openings", async (req, res) => {
+    try {
+      const result = insertRestaurantOpeningSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ message: "Invalid restaurant opening data" });
+      }
+
+      const opening = await storage.createRestaurantOpening(result.data);
+      res.json(opening);
+    } catch (error) {
+      console.error("Failed to create restaurant opening:", error);
+      res.status(500).json({ message: "Failed to create restaurant opening" });
+    }
+  });
+
   // Newsletter endpoint
   app.post("/api/newsletter/subscribe", async (req, res) => {
     try {
@@ -258,26 +309,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Schedule automatic scraping every 6 hours
+  // Schedule automatic comprehensive scraping every 6 hours
   cron.schedule('0 */6 * * *', async () => {
-    console.log('Running scheduled event scraping...');
+    console.log('Running scheduled comprehensive scraping...');
     try {
-      const [googleEvents, catchEvents] = await Promise.all([
-        scrapeGoogleEvents("events in Des Moines Iowa upcoming"),
-        scrapeCatchDesMoines()
-      ]);
-
-      const [enhancedGoogleEvents, enhancedCatchEvents] = await Promise.all([
-        enhanceEvents(googleEvents, 'google'),
-        enhanceEvents(catchEvents, 'catch-des-moines')
-      ]);
-
-      const allEnhancedEvents = [...enhancedGoogleEvents, ...enhancedCatchEvents];
-      await storage.createEvents(allEnhancedEvents);
+      // Get existing events for deduplication
+      const existingEvents = await storage.getEvents();
       
-      console.log(`Scheduled scraping completed: ${allEnhancedEvents.length} events processed`);
+      // Scrape from all sources
+      const { events: newEvents, restaurants: newRestaurants } = await scrapeAllSources();
+      
+      // Deduplicate events against existing ones
+      const existingScrapedEvents = existingEvents.map(e => ({
+        title: e.title,
+        description: e.enhancedDescription || e.originalDescription || e.title,
+        date: e.date,
+        location: e.location,
+        category: e.category,
+        sourceUrl: e.sourceUrl || '',
+        imageUrl: e.imageUrl || undefined,
+        venue: e.venue || undefined,
+        price: e.price || undefined
+      }));
+      const uniqueEvents = deduplicateEvents(existingScrapedEvents, newEvents);
+
+      // Enhance events with AI
+      const enhancedEvents = await enhanceEvents(uniqueEvents, 'comprehensive');
+
+      // Store enhanced events and restaurant openings
+      const [storedEvents, storedRestaurants] = await Promise.all([
+        storage.createEvents(enhancedEvents),
+        storage.createRestaurantOpenings(newRestaurants.map(r => ({
+          name: r.name,
+          description: r.description,
+          location: r.location,
+          cuisine: r.cuisine,
+          openingDate: r.openingDate,
+          status: r.status,
+          sourceUrl: r.sourceUrl
+        })))
+      ]);
+      
+      console.log(`Scheduled scraping completed: ${storedEvents.length} events and ${storedRestaurants.length} restaurant openings processed`);
     } catch (error) {
-      console.error('Scheduled scraping failed:', error);
+      console.error('Scheduled comprehensive scraping failed:', error);
     }
   });
 

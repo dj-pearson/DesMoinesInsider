@@ -10,7 +10,9 @@ import {
   type User, 
   type InsertUser,
   type NewsletterSubscription,
-  type InsertNewsletterSubscription
+  type InsertNewsletterSubscription,
+  type RestaurantOpening,
+  type InsertRestaurantOpening
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -48,6 +50,11 @@ export interface IStorage {
   // Newsletter
   subscribeNewsletter(subscription: InsertNewsletterSubscription): Promise<NewsletterSubscription>;
   getNewsletterSubscriptions(): Promise<NewsletterSubscription[]>;
+  
+  // Restaurant Openings
+  getRestaurantOpenings(): Promise<RestaurantOpening[]>;
+  createRestaurantOpening(opening: InsertRestaurantOpening): Promise<RestaurantOpening>;
+  createRestaurantOpenings(openings: InsertRestaurantOpening[]): Promise<RestaurantOpening[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -57,6 +64,7 @@ export class MemStorage implements IStorage {
   private playgrounds: Map<string, Playground> = new Map();
   private users: Map<string, User> = new Map();
   private newsletterSubscriptions: Map<string, NewsletterSubscription> = new Map();
+  private restaurantOpenings: Map<string, RestaurantOpening> = new Map();
 
   constructor() {
     this.initializeData();
@@ -450,6 +458,41 @@ export class MemStorage implements IStorage {
 
   async getNewsletterSubscriptions(): Promise<NewsletterSubscription[]> {
     return Array.from(this.newsletterSubscriptions.values());
+  }
+
+  // Restaurant Openings
+  async getRestaurantOpenings(): Promise<RestaurantOpening[]> {
+    return Array.from(this.restaurantOpenings.values())
+      .sort((a, b) => {
+        const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return bTime - aTime;
+      });
+  }
+
+  async createRestaurantOpening(insertOpening: InsertRestaurantOpening): Promise<RestaurantOpening> {
+    const id = randomUUID();
+    const opening: RestaurantOpening = { 
+      ...insertOpening,
+      description: insertOpening.description ?? null,
+      location: insertOpening.location ?? null,
+      cuisine: insertOpening.cuisine ?? null,
+      openingDate: insertOpening.openingDate ?? null,
+      sourceUrl: insertOpening.sourceUrl ?? null,
+      id,
+      createdAt: new Date()
+    };
+    this.restaurantOpenings.set(id, opening);
+    return opening;
+  }
+
+  async createRestaurantOpenings(openings: InsertRestaurantOpening[]): Promise<RestaurantOpening[]> {
+    const createdOpenings: RestaurantOpening[] = [];
+    for (const opening of openings) {
+      const created = await this.createRestaurantOpening(opening);
+      createdOpenings.push(created);
+    }
+    return createdOpenings;
   }
 }
 

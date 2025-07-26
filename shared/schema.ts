@@ -65,6 +65,18 @@ export const newsletterSubscriptions = pgTable("newsletter_subscriptions", {
   subscribedAt: timestamp("subscribed_at").defaultNow(),
 });
 
+export const restaurantOpenings = pgTable("restaurant_openings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  location: text("location"),
+  cuisine: text("cuisine"),
+  openingDate: timestamp("opening_date"),
+  status: text("status").notNull(), // 'opening_soon' | 'newly_opened' | 'announced'
+  sourceUrl: text("source_url"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Insert schemas
 export const insertEventSchema = createInsertSchema(events).omit({
   id: true,
@@ -92,6 +104,11 @@ export const insertNewsletterSchema = createInsertSchema(newsletterSubscriptions
   subscribedAt: true,
 });
 
+export const insertRestaurantOpeningSchema = createInsertSchema(restaurantOpenings).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type Event = typeof events.$inferSelect;
 export type InsertEvent = z.infer<typeof insertEventSchema>;
@@ -110,3 +127,6 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 
 export type NewsletterSubscription = typeof newsletterSubscriptions.$inferSelect;
 export type InsertNewsletterSubscription = z.infer<typeof insertNewsletterSchema>;
+
+export type RestaurantOpening = typeof restaurantOpenings.$inferSelect;
+export type InsertRestaurantOpening = z.infer<typeof insertRestaurantOpeningSchema>;
