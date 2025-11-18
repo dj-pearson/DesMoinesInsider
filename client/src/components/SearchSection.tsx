@@ -2,12 +2,14 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2 } from "lucide-react";
 
 interface SearchSectionProps {
   onSearch: (query: string, category: string) => void;
+  isSearching?: boolean;
 }
 
-export default function SearchSection({ onSearch }: SearchSectionProps) {
+export default function SearchSection({ onSearch, isSearching = false }: SearchSectionProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All Categories");
 
@@ -53,11 +55,19 @@ export default function SearchSection({ onSearch }: SearchSectionProps) {
                 </SelectContent>
               </Select>
             </div>
-            <Button 
+            <Button
               className="bg-secondary hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
               onClick={handleSearch}
+              disabled={isSearching}
             >
-              Search
+              {isSearching ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Searching...
+                </>
+              ) : (
+                "Search"
+              )}
             </Button>
           </div>
         </div>
