@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import EventCard from "./EventCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Event } from "@shared/schema";
-import { Calendar, Filter } from "lucide-react";
+import { Calendar } from "lucide-react";
 
 interface EventFiltersProps {
   onViewEventDetails: (event: Event) => void;
@@ -34,8 +34,8 @@ export default function EventFilters({ onViewEventDetails }: EventFiltersProps) 
     return params.toString();
   };
 
-  const { data: events, isLoading, error, refetch } = useQuery<Event[]>({
-    queryKey: ['/api/events', buildQueryParams()],
+  const { data: events, isLoading, error } = useQuery<Event[]>({
+    queryKey: ['/api/events', dateFilter, categoryFilter, locationFilter],
     queryFn: async () => {
       const params = buildQueryParams();
       const url = params ? `/api/events?${params}` : '/api/events';
@@ -44,10 +44,6 @@ export default function EventFilters({ onViewEventDetails }: EventFiltersProps) 
       return response.json();
     },
   });
-
-  const applyFilters = () => {
-    refetch();
-  };
 
   const resetFilters = () => {
     setDateFilter("All Dates");
@@ -78,7 +74,17 @@ export default function EventFilters({ onViewEventDetails }: EventFiltersProps) 
 
         {/* Filter Controls */}
         <div className="bg-neutral-50 rounded-xl p-6 mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm text-neutral-600">Filters apply automatically as you select them</p>
+            <Button
+              variant="outline"
+              onClick={resetFilters}
+              className="text-sm"
+            >
+              Reset All
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <Label className="block text-sm font-semibold text-neutral-700 mb-2">Date Range</Label>
               <Select value={dateFilter} onValueChange={setDateFilter}>
@@ -123,22 +129,6 @@ export default function EventFilters({ onViewEventDetails }: EventFiltersProps) 
                   <SelectItem value="West Des Moines">West Des Moines</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-            <div className="flex items-end gap-2">
-              <Button 
-                className="flex-1 bg-primary hover:bg-blue-700 text-white font-semibold transition-colors"
-                onClick={applyFilters}
-              >
-                <Filter className="h-4 w-4 mr-2" />
-                Apply
-              </Button>
-              <Button 
-                variant="outline" 
-                onClick={resetFilters}
-                className="px-3"
-              >
-                Reset
-              </Button>
             </div>
           </div>
         </div>
