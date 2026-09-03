@@ -5,8 +5,85 @@ import { scrapeAllSources, deduplicateEvents } from "./services/scraper.js";
 import { enhanceEvents } from "./services/eventEnhancer.js";
 import { insertNewsletterSchema, insertRestaurantOpeningSchema } from "@shared/schema.js";
 import cron from "node-cron";
+import { requireAdmin } from "./middleware/auth.js";
+import {
+  apiWriteLimiter,
+  expensiveOperationLimiter,
+  newsletterLimiter,
+} from "./middleware/rateLimit.js";
+
+/**
+ * Scrape every configured source, deduplicate against what we already have,
+ * enhance the new events with AI, and persist the results.
+ *
+ * Shared by the admin endpoint and the cron schedule so the two paths can never
+ * drift apart.
+ */
+async function runComprehensiveScrape(): Promise<{
+  events: Awaited<ReturnType<typeof storage.createEvents>>;
+  restaurants: Awaited<ReturnType<typeof storage.createRestaurantOpenings>>;
+}> {
+  const startedAt = Date.now();
+  console.log("Starting comprehensive scraping from all sources...");
+
+  const existingEvents = await storage.getEvents();
+  const { events: newEvents, restaurants: newRestaurants } = await scrapeAllSources();
+
+  console.log(`Scraped ${newEvents.length} events from all sources`);
+  console.log(`Found ${newRestaurants.length} restaurant openings from news sources`);
+
+  // deduplicateEvents compares against the ScrapedEvent shape, so map stored
+  // rows into it before checking.
+  const existingScrapedEvents = existingEvents.map((e) => ({
+    title: e.title,
+    description: e.enhancedDescription || e.originalDescription || e.title,
+    date: e.date,
+    location: e.location,
+    category: e.category,
+    sourceUrl: e.sourceUrl || "",
+    imageUrl: e.imageUrl || undefined,
+    venue: e.venue || undefined,
+    price: e.price || undefined,
+  }));
+
+  const uniqueEvents = deduplicateEvents(existingScrapedEvents, newEvents);
+  console.log(`After deduplication: ${uniqueEvents.length} unique events to add`);
+
+  const enhancedEvents = await enhanceEvents(uniqueEvents, "comprehensive");
+
+  const [storedEvents, storedRestaurants] = await Promise.all([
+    storage.createEvents(enhancedEvents),
+    storage.createRestaurantOpenings(
+      newRestaurants.map((r) => ({
+        name: r.name,
+        description: r.description,
+        location: r.location,
+        cuisine: r.cuisine,
+        openingDate: r.openingDate,
+        status: r.status,
+        sourceUrl: r.sourceUrl,
+      })),
+    ),
+  ]);
+
+  const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(
+    `Scrape complete in ${seconds}s: stored ${storedEvents.length} events and ${storedRestaurants.length} restaurant openings`,
+  );
+
+  return { events: storedEvents, restaurants: storedRestaurants };
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Rate limit every state-changing API request per IP. Reads stay unmetered so
+  // ordinary browsing and crawling are unaffected.
+  app.use("/api", (req, res, next) => {
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+      return next();
+    }
+    return apiWriteLimiter(req, res, next);
+  });
+
   // Events endpoints
   app.get("/api/events", async (req, res) => {
     try {
@@ -49,66 +126,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Comprehensive scraping endpoint for all sources
-  app.post("/api/events/scrape", async (req, res) => {
-    try {
-      console.log("Starting comprehensive scraping from all sources...");
-      
-      // Get existing events for deduplication
-      const existingEvents = await storage.getEvents();
-      
-      // Scrape from all sources
-      const { events: newEvents, restaurants: newRestaurants } = await scrapeAllSources();
-      
-      console.log(`Scraped ${newEvents.length} new events from all sources`);
-      console.log(`Found ${newRestaurants.length} restaurant openings from news sources`);
+  // Comprehensive scraping endpoint for all sources.
+  // Admin only: this drives a headless browser across a dozen sites and spends
+  // OpenAI credits, so it must never be reachable anonymously.
+  app.post(
+    "/api/events/scrape",
+    requireAdmin,
+    expensiveOperationLimiter,
+    async (_req, res) => {
+      try {
+        const { events: storedEvents, restaurants: storedRestaurants } =
+          await runComprehensiveScrape();
 
-      // Deduplicate events against existing ones - map existing events to match ScrapedEvent interface
-      const existingScrapedEvents = existingEvents.map(e => ({
-        title: e.title,
-        description: e.enhancedDescription || e.originalDescription || e.title,
-        date: e.date,
-        location: e.location,
-        category: e.category,
-        sourceUrl: e.sourceUrl || '',
-        imageUrl: e.imageUrl || undefined,
-        venue: e.venue || undefined,
-        price: e.price || undefined
-      }));
-      const uniqueEvents = deduplicateEvents(existingScrapedEvents, newEvents);
-      console.log(`After deduplication: ${uniqueEvents.length} unique events to add`);
-
-      // Enhance events with AI
-      const enhancedEvents = await enhanceEvents(uniqueEvents, 'comprehensive');
-
-      // Store enhanced events and restaurant openings
-      const [storedEvents, storedRestaurants] = await Promise.all([
-        storage.createEvents(enhancedEvents),
-        storage.createRestaurantOpenings(newRestaurants.map(r => ({
-          name: r.name,
-          description: r.description,
-          location: r.location,
-          cuisine: r.cuisine,
-          openingDate: r.openingDate,
-          status: r.status,
-          sourceUrl: r.sourceUrl
-        })))
-      ]);
-
-      console.log(`Enhanced and stored ${storedEvents.length} events`);
-      console.log(`Stored ${storedRestaurants.length} restaurant openings`);
-      
-      res.json({
-        message: `Successfully scraped and enhanced ${storedEvents.length} events and ${storedRestaurants.length} restaurant openings`,
-        events: storedEvents,
-        restaurants: storedRestaurants
-      });
-    } catch (error) {
-      console.error("Failed to comprehensively scrape:", error);
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      res.status(500).json({ message: "Failed to scrape: " + errorMessage });
-    }
-  });
+        res.json({
+          message: `Successfully scraped and enhanced ${storedEvents.length} events and ${storedRestaurants.length} restaurant openings`,
+          events: storedEvents,
+          restaurants: storedRestaurants,
+        });
+      } catch (error) {
+        console.error("Failed to comprehensively scrape:", error);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        res.status(500).json({ message: "Failed to scrape: " + errorMessage });
+      }
+    },
+  );
 
   // Restaurants endpoints
   app.get("/api/restaurants", async (req, res) => {
@@ -217,7 +258,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/restaurant-openings", async (req, res) => {
+  // Admin only: this inserts arbitrary content that renders on the public site.
+  app.post("/api/restaurant-openings", requireAdmin, async (req, res) => {
     try {
       const result = insertRestaurantOpeningSchema.safeParse(req.body);
       if (!result.success) {
@@ -233,7 +275,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Newsletter endpoint
-  app.post("/api/newsletter/subscribe", async (req, res) => {
+  app.post("/api/newsletter/subscribe", newsletterLimiter, async (req, res) => {
     try {
       const result = insertNewsletterSchema.safeParse(req.body);
       if (!result.success) {
@@ -309,50 +351,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Schedule automatic comprehensive scraping every 6 hours
-  cron.schedule('0 */6 * * *', async () => {
-    console.log('Running scheduled comprehensive scraping...');
+  // Scheduled scraping every 6 hours. Uses the same code path as the admin
+  // endpoint so behaviour cannot drift between them.
+  cron.schedule("0 */6 * * *", async () => {
+    console.log("Running scheduled comprehensive scraping...");
     try {
-      // Get existing events for deduplication
-      const existingEvents = await storage.getEvents();
-      
-      // Scrape from all sources
-      const { events: newEvents, restaurants: newRestaurants } = await scrapeAllSources();
-      
-      // Deduplicate events against existing ones
-      const existingScrapedEvents = existingEvents.map(e => ({
-        title: e.title,
-        description: e.enhancedDescription || e.originalDescription || e.title,
-        date: e.date,
-        location: e.location,
-        category: e.category,
-        sourceUrl: e.sourceUrl || '',
-        imageUrl: e.imageUrl || undefined,
-        venue: e.venue || undefined,
-        price: e.price || undefined
-      }));
-      const uniqueEvents = deduplicateEvents(existingScrapedEvents, newEvents);
-
-      // Enhance events with AI
-      const enhancedEvents = await enhanceEvents(uniqueEvents, 'comprehensive');
-
-      // Store enhanced events and restaurant openings
-      const [storedEvents, storedRestaurants] = await Promise.all([
-        storage.createEvents(enhancedEvents),
-        storage.createRestaurantOpenings(newRestaurants.map(r => ({
-          name: r.name,
-          description: r.description,
-          location: r.location,
-          cuisine: r.cuisine,
-          openingDate: r.openingDate,
-          status: r.status,
-          sourceUrl: r.sourceUrl
-        })))
-      ]);
-      
-      console.log(`Scheduled scraping completed: ${storedEvents.length} events and ${storedRestaurants.length} restaurant openings processed`);
+      const { events, restaurants } = await runComprehensiveScrape();
+      console.log(
+        `Scheduled scraping completed: ${events.length} events and ${restaurants.length} restaurant openings processed`,
+      );
     } catch (error) {
-      console.error('Scheduled comprehensive scraping failed:', error);
+      console.error("Scheduled comprehensive scraping failed:", error);
     }
   });
 

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
 import Header from "@/components/Header";
 import SearchSection from "@/components/SearchSection";
 import FeaturedEvents from "@/components/FeaturedEvents";
@@ -11,7 +10,6 @@ import { RestaurantOpenings } from "@/components/RestaurantOpenings";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
 import { Event } from "@shared/schema";
 import { Calendar, MapPin, ExternalLink, Sparkles, Search as SearchIcon } from "lucide-react";
 import { format } from "date-fns";
@@ -31,23 +29,6 @@ export default function Home() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const { toast } = useToast();
-
-  const scrapeMutation = useMutation({
-    mutationFn: () => apiRequest('POST', '/api/events/scrape'),
-    onSuccess: () => {
-      toast({
-        title: "Events Updated!",
-        description: "Latest events have been scraped and enhanced with AI.",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Scraping Failed",
-        description: error.message || "Failed to scrape events. Please try again.",
-        variant: "destructive",
-      });
-    },
-  });
 
   const handleSearch = async (query: string, category: string) => {
     if (!query.trim()) {
@@ -294,19 +275,11 @@ export default function Home() {
         <div className="py-8">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-8">
             <div className="flex items-center justify-between">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => setShowAllEvents(false)}
               >
                 ← Back to Featured
-              </Button>
-              <Button 
-                onClick={() => scrapeMutation.mutate()}
-                disabled={scrapeMutation.isPending}
-                className="bg-accent hover:bg-green-700 text-white"
-              >
-                <Sparkles className="h-4 w-4 mr-2" />
-                {scrapeMutation.isPending ? "Updating..." : "Update Events"}
               </Button>
             </div>
           </div>

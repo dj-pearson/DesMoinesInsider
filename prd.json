@@ -118,7 +118,7 @@
         "A rate limit (per IP) is applied to all POST routes under /api.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-003",
