@@ -14,8 +14,13 @@ export interface EventSource {
   name: string;
   /** Used when the source gives us nothing better; the normalizer refines it. */
   defaultCategory: string;
-  /** Slug of the venue in the venue seed. */
-  venueSlug: string;
+  /**
+   * Slug of the venue in the venue seed, or null for a source that spans a
+   * whole city rather than one room. A suburb's calendar covers its parks, its
+   * library and its main street, so pinning it to a single venue would be a
+   * lie; those sources carry a neighborhood on each event instead.
+   */
+  venueSlug: string | null;
   scrape(): Promise<ScrapedEvent[]>;
 }
 

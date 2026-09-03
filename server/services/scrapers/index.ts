@@ -1,4 +1,10 @@
+import { altoona } from "./altoona.js";
+import { ankeny, johnston, urbandale, waukee, westDesMoines } from "./cities.js";
 import { artCenter } from "./artCenter.js";
+import { desMoinesLibrary } from "./dsmLibrary.js";
+import { desMoinesParks } from "./dsmParks.js";
+import { polkCountyConservation } from "./polkConservation.js";
+import { valleyJunction } from "./valleyJunction.js";
 import { adventureland } from "./adventureland.js";
 import { blankParkZoo } from "./blankParkZoo.js";
 import { botanicalGarden } from "./botanicalGarden.js";
@@ -39,6 +45,19 @@ export const SOURCES: EventSource[] = [
   adventureland,
   // Year-round civic calendar
   iowaStateFairgrounds,
+  // Free and civic: libraries, parks, and the suburbs' own calendars. This is
+  // the half of the metro no regional calendar covers, and almost all of it is
+  // free, so it is where the site is most useful to someone who lives here.
+  desMoinesLibrary,
+  desMoinesParks,
+  polkCountyConservation,
+  valleyJunction,
+  ankeny,
+  urbandale,
+  johnston,
+  waukee,
+  westDesMoines,
+  altoona,
 ];
 
 /**

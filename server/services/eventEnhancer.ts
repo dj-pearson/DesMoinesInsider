@@ -1,6 +1,6 @@
 import { enhanceAndCategorizeEvent } from './openai.js';
 import { ScrapedEvent } from './scraper.js';
-import { InsertEvent } from '@shared/schema.js';
+import { EventToCreate } from '@shared/schema.js';
 import { normalizeCategory } from '@shared/categories.js';
 import { extractEventFlags, mergeFlags } from '@shared/eventFlags.js';
 import { findVenueFacts } from '../data/venues.js';
@@ -14,8 +14,8 @@ import { findVenueFacts } from '../data/venues.js';
 export async function enhanceEvents(
   scrapedEvents: ScrapedEvent[],
   source: string,
-): Promise<InsertEvent[]> {
-  const enhancedEvents: InsertEvent[] = [];
+): Promise<EventToCreate[]> {
+  const enhancedEvents: EventToCreate[] = [];
 
   for (const event of scrapedEvents) {
     // Flags come from three sources, most trusted first: curated venue facts,
@@ -41,6 +41,8 @@ export async function enhanceEvents(
       price: event.price,
       // Only a curated venue can assert skywalk access; nothing else knows.
       isSkywalkAccessible: venueFacts?.isSkywalkAccessible ?? null,
+      // A source that names its own neighborhood beats the keyword classifier.
+      neighborhoodSlug: event.neighborhoodSlug,
     };
 
     try {
@@ -63,9 +65,13 @@ export async function enhanceEvents(
           : null,
       });
 
+      // Order is precedence. A stated price in the event's own text outranks
+      // the source's default, so a library class with a $5 materials fee is not
+      // published as free; the model only fills what nothing else answered.
       const flags = mergeFlags(
         venueFacts ? { isIndoor: venueFacts.isIndoor } : null,
         textFlags,
+        event.isFree === undefined ? null : { isFree: event.isFree },
         result.flags,
       );
 
@@ -84,7 +90,11 @@ export async function enhanceEvents(
 
       enhancedEvents.push({
         ...base,
-        ...mergeFlags(venueFacts ? { isIndoor: venueFacts.isIndoor } : null, textFlags),
+        ...mergeFlags(
+          venueFacts ? { isIndoor: venueFacts.isIndoor } : null,
+          textFlags,
+          event.isFree === undefined ? null : { isFree: event.isFree },
+        ),
         enhancedDescription: event.description,
         category: normalizeCategory(event.category, event.title),
         secondaryCategories: [],

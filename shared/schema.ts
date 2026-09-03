@@ -598,6 +598,14 @@ export const scrapeRuns = pgTable("scrape_runs", {
   startedAt: timestamp("started_at").defaultNow(),
 });
 
+/**
+ * An event on its way into the database, with the one field that is resolved
+ * rather than stored: a source that knows its own neighborhood passes the slug,
+ * and storage turns it into an id. Without this the keyword classifier would
+ * re-guess something the source already stated.
+ */
+export type EventToCreate = InsertEvent & { neighborhoodSlug?: string };
+
 export type ScrapeRun = typeof scrapeRuns.$inferSelect;
 
 export interface InsertScrapeRun {

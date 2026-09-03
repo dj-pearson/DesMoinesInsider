@@ -523,7 +523,7 @@
         "Where a source exposes an iCal or RSS feed, the scraper consumes the feed instead of Puppeteer.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-021",

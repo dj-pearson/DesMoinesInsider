@@ -1,6 +1,7 @@
 import { fetchJson } from "./http.js";
 import { isPlausibleEventDate, parseLocalTimestamp } from "./dates.js";
 import { textOf } from "./html.js";
+import { freeUnlessPriced } from "./civic.js";
 import type { ScrapedEvent } from "./types.js";
 
 /**
@@ -42,6 +43,13 @@ export interface TribeSourceConfig {
   category: string;
   /** Some sites host several venues; keep only events matching this. */
   venueFilter?: (venueName: string) => boolean;
+  /** Slug from the neighborhood seed, when the source is tied to one place. */
+  neighborhoodSlug?: string;
+  /**
+   * Treat events as free unless the listing names a cost. True for civic and
+   * main-street calendars, false for a museum that charges admission.
+   */
+  freeByDefault?: boolean;
 }
 
 const PER_PAGE = 50;
@@ -79,6 +87,10 @@ export async function scrapeTribeCalendar(
       imageUrl: typeof item.image === "object" && item.image ? item.image.url : undefined,
       venue: venueName,
       price: item.cost?.trim() || undefined,
+      isFree: config.freeByDefault
+        ? freeUnlessPriced(title, description, item.cost ?? undefined)
+        : undefined,
+      neighborhoodSlug: config.neighborhoodSlug,
     });
   }
 

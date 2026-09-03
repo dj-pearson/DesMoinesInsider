@@ -39,6 +39,7 @@ import {
   scrapeRuns,
   type ScrapeRun,
   type InsertScrapeRun,
+  type EventToCreate,
 } from "@shared/schema";
 import {
   and,
@@ -708,7 +709,7 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async createEvents(newEvents: InsertEvent[]): Promise<Event[]> {
+  async createEvents(newEvents: EventToCreate[]): Promise<Event[]> {
     if (newEvents.length === 0) return [];
 
     // Resolve collisions against both the stored slugs and the ones this batch
@@ -716,19 +717,26 @@ export class DatabaseStorage implements IStorage {
     // title still produces two distinct URLs.
     const taken = await this.takenSlugs();
     const prepared = await Promise.all(
-      newEvents.map(async (event) => {
+      newEvents.map(async ({ neighborhoodSlug, ...event }) => {
         const slug = ensureUniqueSlug(buildEventSlug(event.title, event.date), taken);
         taken.add(slug);
         const facts = findVenueFacts(event.venue, event.location, event.title);
+        // A source that named its neighborhood is trusted over the keyword
+        // classifier; the classifier is the fallback, not the override.
+        const statedNeighborhoodId = neighborhoodSlug
+          ? ((await this.neighborhoodIds()).get(neighborhoodSlug) ?? null)
+          : null;
         return {
           ...event,
           slug,
           venueId: facts ? ((await this.venueIds()).get(facts.slug) ?? null) : null,
-          neighborhoodId: await this.classify({
-            venue: event.venue,
-            location: event.location,
-            title: event.title,
-          }),
+          neighborhoodId:
+            statedNeighborhoodId ??
+            (await this.classify({
+              venue: event.venue,
+              location: event.location,
+              title: event.title,
+            })),
         };
       }),
     );
@@ -1722,12 +1730,16 @@ export class MemStorage implements IStorage {
   }
 
   /** Resolve content details to a neighborhood id, or null when unsure. */
-  private classify(input: ClassifyInput): string | null {
-    const slug = classifyNeighborhoodSlug(input);
-    if (!slug) return null;
+  private neighborhoodBySlug(slug: string): string | null {
     return (
       Array.from(this.neighborhoods.values()).find((n) => n.slug === slug)?.id ?? null
     );
+  }
+
+  private classify(input: ClassifyInput): string | null {
+    const slug = classifyNeighborhoodSlug(input);
+    if (!slug) return null;
+    return this.neighborhoodBySlug(slug);
   }
 
   // Events
@@ -1844,10 +1856,22 @@ export class MemStorage implements IStorage {
     return event;
   }
 
-  async createEvents(newEvents: InsertEvent[]): Promise<Event[]> {
+  async createEvents(newEvents: EventToCreate[]): Promise<Event[]> {
     const created: Event[] = [];
-    for (const event of newEvents) {
-      created.push(await this.createEvent(event));
+    for (const { neighborhoodSlug, ...event } of newEvents) {
+      const stored = await this.createEvent(event);
+      // Same rule as the database store: a stated neighborhood wins over the
+      // classifier's guess, so the two implementations cannot disagree.
+      if (neighborhoodSlug) {
+        const id = this.neighborhoodBySlug(neighborhoodSlug);
+        if (id) {
+          const withNeighborhood = { ...stored, neighborhoodId: id };
+          this.events.set(stored.id, withNeighborhood);
+          created.push(withNeighborhood);
+          continue;
+        }
+      }
+      created.push(stored);
     }
     return created;
   }

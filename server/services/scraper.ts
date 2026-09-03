@@ -14,6 +14,19 @@ export interface ScrapedEvent {
   imageUrl?: string;
   venue?: string;
   price?: string;
+  /**
+   * What the source itself knows about admission, when it knows it. A library
+   * or city parks calendar is free by default in a way a ticketed venue is not.
+   * Left undefined by sources that cannot say; it never overrides a price the
+   * event text states outright.
+   */
+  isFree?: boolean;
+  /**
+   * Neighborhood the source can name directly, as a slug from the neighborhood
+   * seed. A suburb's own calendar knows it is in Ankeny; the keyword classifier
+   * only guesses. Set this and the guess is skipped.
+   */
+  neighborhoodSlug?: string;
 }
 
 export interface ScrapedRestaurant {
