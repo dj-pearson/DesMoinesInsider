@@ -76,3 +76,16 @@ export const submissionLimiter = rateLimit({
   keyGenerator: clientKey,
   handler: tooMany,
 });
+
+/**
+ * Sign-in attempts. Slows credential stuffing without locking a real person
+ * out of their own account for long.
+ */
+export const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: clientKey,
+  handler: tooMany,
+});

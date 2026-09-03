@@ -468,7 +468,7 @@
         "Home page, when logged in with a home neighborhood, shows a 'Near You in {Neighborhood}' section first.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-018",

@@ -10,6 +10,7 @@ import {
   restaurantOpenings,
   restaurants,
   users,
+  savedEvents,
   type Attraction,
   type Event,
   type EventSubmission,
@@ -30,6 +31,7 @@ import {
   type Restaurant,
   type RestaurantOpening,
   type User,
+  type PublicUser,
 } from "@shared/schema";
 import {
   and,
@@ -161,7 +163,16 @@ export interface IStorage {
   // Users
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
+  /** Login accepts either, so both are looked up the same way. */
+  getUserByUsernameOrEmail(identifier: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  setHomeNeighborhood(userId: string, neighborhoodId: string | null): Promise<PublicUser | undefined>;
+
+  // Saved events
+  saveEvent(userId: string, eventId: string): Promise<void>;
+  unsaveEvent(userId: string, eventId: string): Promise<void>;
+  getSavedEvents(userId: string): Promise<Event[]>;
+  isEventSaved(userId: string, eventId: string): Promise<boolean>;
 
   // Newsletter
   subscribeNewsletter(
@@ -884,9 +895,71 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async getUserByUsernameOrEmail(identifier: string): Promise<User | undefined> {
+    const value = identifier.trim().toLowerCase();
+    const [row] = await this.db
+      .select()
+      .from(users)
+      .where(or(eq(users.username, value), eq(users.email, value)))
+      .limit(1);
+    return row;
+  }
+
   async createUser(user: InsertUser): Promise<User> {
     const [created] = await this.db.insert(users).values(user).returning();
     return created;
+  }
+
+  async setHomeNeighborhood(
+    userId: string,
+    neighborhoodId: string | null,
+  ): Promise<PublicUser | undefined> {
+    const [row] = await this.db
+      .update(users)
+      .set({ homeNeighborhoodId: neighborhoodId })
+      .where(eq(users.id, userId))
+      .returning({
+        id: users.id,
+        username: users.username,
+        email: users.email,
+        homeNeighborhoodId: users.homeNeighborhoodId,
+        createdAt: users.createdAt,
+      });
+    return row;
+  }
+
+  // Saved events
+  async saveEvent(userId: string, eventId: string): Promise<void> {
+    // Saving something already saved is a no-op, not an error.
+    await this.db
+      .insert(savedEvents)
+      .values({ userId, eventId })
+      .onConflictDoNothing();
+  }
+
+  async unsaveEvent(userId: string, eventId: string): Promise<void> {
+    await this.db
+      .delete(savedEvents)
+      .where(and(eq(savedEvents.userId, userId), eq(savedEvents.eventId, eventId)));
+  }
+
+  async getSavedEvents(userId: string): Promise<Event[]> {
+    const rows = await this.db
+      .select({ event: events })
+      .from(savedEvents)
+      .innerJoin(events, eq(events.id, savedEvents.eventId))
+      .where(eq(savedEvents.userId, userId))
+      .orderBy(asc(events.date));
+    return rows.map((row) => row.event);
+  }
+
+  async isEventSaved(userId: string, eventId: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: savedEvents.id })
+      .from(savedEvents)
+      .where(and(eq(savedEvents.userId, userId), eq(savedEvents.eventId, eventId)))
+      .limit(1);
+    return Boolean(row);
   }
 
   // Newsletter
@@ -1851,11 +1924,59 @@ export class MemStorage implements IStorage {
     return Array.from(this.users.values()).find((user) => user.username === username);
   }
 
+  async getUserByUsernameOrEmail(identifier: string): Promise<User | undefined> {
+    const value = identifier.trim().toLowerCase();
+    return Array.from(this.users.values()).find(
+      (user) => user.username === value || user.email === value,
+    );
+  }
+
   async createUser(insertUser: InsertUser): Promise<User> {
     const id = randomUUID();
-    const user: User = { ...insertUser, id };
+    const user: User = {
+      ...insertUser,
+      id,
+      homeNeighborhoodId: insertUser.homeNeighborhoodId ?? null,
+      createdAt: new Date(),
+    };
     this.users.set(id, user);
     return user;
+  }
+
+  async setHomeNeighborhood(
+    userId: string,
+    neighborhoodId: string | null,
+  ): Promise<PublicUser | undefined> {
+    const user = this.users.get(userId);
+    if (!user) return undefined;
+    const updated = { ...user, homeNeighborhoodId: neighborhoodId };
+    this.users.set(userId, updated);
+    const { passwordHash: _hash, ...rest } = updated;
+    return rest;
+  }
+
+  // Saved events
+  private saved: Map<string, Set<string>> = new Map();
+
+  async saveEvent(userId: string, eventId: string): Promise<void> {
+    const set = this.saved.get(userId) ?? new Set<string>();
+    set.add(eventId);
+    this.saved.set(userId, set);
+  }
+
+  async unsaveEvent(userId: string, eventId: string): Promise<void> {
+    this.saved.get(userId)?.delete(eventId);
+  }
+
+  async getSavedEvents(userId: string): Promise<Event[]> {
+    const ids = this.saved.get(userId) ?? new Set<string>();
+    return Array.from(this.events.values())
+      .filter((event) => ids.has(event.id))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  }
+
+  async isEventSaved(userId: string, eventId: string): Promise<boolean> {
+    return this.saved.get(userId)?.has(eventId) ?? false;
   }
 
   // Newsletter

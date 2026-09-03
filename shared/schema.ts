@@ -7,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   varchar,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
@@ -242,8 +243,31 @@ export const playgrounds = pgTable("playgrounds", {
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+  email: text("email").notNull().unique(),
+  /** bcrypt hash. Never the password itself, and never returned by the API. */
+  passwordHash: text("password_hash").notNull(),
+  homeNeighborhoodId: varchar("home_neighborhood_id").references(() => neighborhoods.id),
+  createdAt: timestamp("created_at").defaultNow(),
 });
+
+/** Events a reader has kept. One row per user per event. */
+export const savedEvents = pgTable(
+  "saved_events",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id),
+    eventId: varchar("event_id")
+      .notNull()
+      .references(() => events.id),
+    savedAt: timestamp("saved_at").defaultNow(),
+  },
+  (table) => ({
+    // Saving twice is a no-op rather than a duplicate row.
+    userEvent: unique("saved_events_user_event").on(table.userId, table.eventId),
+  }),
+);
 
 export const newsletterSubscriptions = pgTable("newsletter_subscriptions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -362,8 +386,34 @@ export const insertPlaygroundSchema = createInsertSchema(playgrounds)
     kind: z.enum(PLAYGROUND_KINDS).optional(),
   });
 
+/**
+ * Registration input.
+ *
+ * The password is accepted here and hashed before it reaches the database; the
+ * table stores only `passwordHash`, which no API response ever includes.
+ */
+export const registerUserSchema = z.object({
+  username: z
+    .string()
+    .trim()
+    .min(3)
+    .max(30)
+    .regex(/^[a-zA-Z0-9_-]+$/, "Letters, numbers, hyphens and underscores only"),
+  email: z.string().trim().email().max(320),
+  // Length is the property that actually matters; composition rules mostly
+  // push people towards predictable substitutions.
+  password: z.string().min(10).max(200),
+  homeNeighborhoodId: z.string().uuid().optional().nullable(),
+});
+
+export const loginSchema = z.object({
+  username: z.string().trim().min(1).max(320),
+  password: z.string().min(1).max(200),
+});
+
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
+  createdAt: true,
 });
 
 export const insertNewsletterSchema = createInsertSchema(newsletterSubscriptions)
@@ -477,6 +527,14 @@ export type Playground = typeof playgrounds.$inferSelect;
 export type InsertPlayground = z.infer<typeof insertPlaygroundSchema>;
 
 export type User = typeof users.$inferSelect;
+
+/** What the API returns for a user. Never includes the hash. */
+export type PublicUser = Pick<
+  User,
+  "id" | "username" | "email" | "homeNeighborhoodId" | "createdAt"
+>;
+
+export type SavedEvent = typeof savedEvents.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
 export type NewsletterSubscription = typeof newsletterSubscriptions.$inferSelect;

@@ -7,6 +7,8 @@ import {
   insertEventSubmissionSchema,
   insertNewsletterSchema,
   insertRestaurantOpeningSchema,
+  loginSchema,
+  registerUserSchema,
 } from "@shared/schema.js";
 import cron from "node-cron";
 import {
@@ -18,6 +20,13 @@ import {
 import { requireAdmin } from "./middleware/auth.js";
 import { buildRobotsTxt, buildSitemap } from "./services/sitemap.js";
 import {
+  burnTimingBudget,
+  hashPassword,
+  requireUser,
+  toPublicUser,
+  verifyPassword,
+} from "./auth.js";
+import {
   createToken,
   sendConfirmationEmail,
   sendTestIssue,
@@ -28,6 +37,7 @@ import {
   expensiveOperationLimiter,
   newsletterLimiter,
   submissionLimiter,
+  authLimiter,
 } from "./middleware/rateLimit.js";
 
 /**
@@ -502,6 +512,150 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to create restaurant opening:", error);
       res.status(500).json({ message: "Failed to create restaurant opening" });
+    }
+  });
+
+  // Authentication
+  app.post("/api/auth/register", authLimiter, async (req, res) => {
+    try {
+      const result = registerUserSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({
+          message: "Please check the form",
+          issues: result.error.issues.map((issue) => ({
+            field: issue.path.join("."),
+            message: issue.message,
+          })),
+        });
+      }
+
+      // Stored lower-case so "Dana" and "dana" cannot both be registered.
+      const username = result.data.username.toLowerCase();
+      const email = result.data.email.toLowerCase();
+
+      const existing = await storage.getUserByUsernameOrEmail(username);
+      const existingEmail = await storage.getUserByUsernameOrEmail(email);
+      if (existing || existingEmail) {
+        return res.status(409).json({ message: "That username or email is taken" });
+      }
+
+      const user = await storage.createUser({
+        username,
+        email,
+        passwordHash: await hashPassword(result.data.password),
+        homeNeighborhoodId: result.data.homeNeighborhoodId ?? null,
+      });
+
+      // Regenerate before attaching identity so a pre-login session id cannot
+      // be reused by whoever set it (session fixation).
+      req.session.regenerate((error) => {
+        if (error) {
+          console.error("Failed to regenerate session:", error);
+          return res.status(500).json({ message: "Could not sign you in" });
+        }
+        req.session.userId = user.id;
+        res.json({ user: toPublicUser(user) });
+      });
+    } catch (error) {
+      console.error("Failed to register:", error);
+      res.status(500).json({ message: "Could not create your account" });
+    }
+  });
+
+  app.post("/api/auth/login", authLimiter, async (req, res) => {
+    try {
+      const result = loginSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ message: "Enter a username and password" });
+      }
+
+      const user = await storage.getUserByUsernameOrEmail(result.data.username);
+
+      // Same message and similar timing whether the account exists or the
+      // password is wrong, so neither can be used to enumerate accounts.
+      if (!user) {
+        await burnTimingBudget(result.data.password);
+        return res.status(401).json({ message: "Those details do not match" });
+      }
+
+      if (!(await verifyPassword(result.data.password, user.passwordHash))) {
+        return res.status(401).json({ message: "Those details do not match" });
+      }
+
+      req.session.regenerate((error) => {
+        if (error) {
+          console.error("Failed to regenerate session:", error);
+          return res.status(500).json({ message: "Could not sign you in" });
+        }
+        req.session.userId = user.id;
+        res.json({ user: toPublicUser(user) });
+      });
+    } catch (error) {
+      console.error("Failed to log in:", error);
+      res.status(500).json({ message: "Could not sign you in" });
+    }
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    req.session.destroy((error) => {
+      if (error) console.error("Failed to destroy session:", error);
+      res.clearCookie("dsm.sid");
+      res.json({ message: "Signed out" });
+    });
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    if (!req.session?.userId) return res.json({ user: null });
+    try {
+      const user = await storage.getUser(req.session.userId);
+      res.json({ user: user ? toPublicUser(user) : null });
+    } catch (error) {
+      console.error("Failed to load session user:", error);
+      res.status(500).json({ message: "Could not load your account" });
+    }
+  });
+
+  app.patch("/api/me", requireUser, async (req, res) => {
+    try {
+      const raw = req.body?.homeNeighborhoodId;
+      const neighborhoodId = typeof raw === "string" && raw ? raw : null;
+      const user = await storage.setHomeNeighborhood(req.session.userId!, neighborhoodId);
+      res.json({ user });
+    } catch (error) {
+      console.error("Failed to update account:", error);
+      res.status(500).json({ message: "Could not update your account" });
+    }
+  });
+
+  // Saved events
+  app.get("/api/me/saved", requireUser, async (req, res) => {
+    try {
+      res.json(await storage.getSavedEvents(req.session.userId!));
+    } catch (error) {
+      console.error("Failed to load saved events:", error);
+      res.status(500).json({ message: "Could not load your saved events" });
+    }
+  });
+
+  app.post("/api/events/:id/save", requireUser, async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.id);
+      if (!event) return res.status(404).json({ message: "Event not found" });
+      await storage.saveEvent(req.session.userId!, req.params.id);
+      res.json({ saved: true });
+    } catch (error) {
+      console.error("Failed to save event:", error);
+      res.status(500).json({ message: "Could not save that event" });
+    }
+  });
+
+  app.delete("/api/events/:id/save", requireUser, async (req, res) => {
+    try {
+      await storage.unsaveEvent(req.session.userId!, req.params.id);
+      res.json({ saved: false });
+    } catch (error) {
+      console.error("Failed to unsave event:", error);
+      res.status(500).json({ message: "Could not remove that event" });
     }
   });
 

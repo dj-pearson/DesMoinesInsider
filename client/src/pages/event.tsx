@@ -1,10 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRoute } from "wouter";
 import { format } from "date-fns";
 import {
   ArrowLeft,
   Calendar,
   ExternalLink,
+  Bookmark,
+  BookmarkCheck,
   Lightbulb,
   MapPin,
   Sparkles,
@@ -16,6 +18,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSeo, toMetaDescription } from "@/lib/seo";
+import { useAuth } from "@/hooks/use-auth";
+import { apiRequest } from "@/lib/queryClient";
 import type { Event } from "@shared/schema";
 
 function formatEventDate(date: string | Date): string {
@@ -88,6 +92,28 @@ export default function EventPage() {
     queryKey: [`/api/events/slug/${slug}`],
     enabled: Boolean(slug),
     retry: false,
+  });
+
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+
+  // Saved state comes from the user's own list rather than a per-event flag,
+  // so it stays correct without another endpoint.
+  const { data: saved } = useQuery<Event[]>({
+    queryKey: ["/api/me/saved"],
+    enabled: Boolean(user),
+    retry: false,
+  });
+  const isSaved = Boolean(event && saved?.some((e) => e.id === event.id));
+
+  const toggleSave = useMutation({
+    mutationFn: async () => {
+      if (!event) return;
+      return apiRequest(isSaved ? "DELETE" : "POST", `/api/events/${event.id}/save`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/me/saved"] });
+    },
   });
 
   const canonicalPath = slug ? `/events/${slug}` : "/events";
@@ -168,9 +194,31 @@ export default function EventPage() {
 
         <Badge className="bg-primary text-white mb-4">{event.category}</Badge>
 
-        <h1 className="text-3xl md:text-4xl font-bold text-neutral-900 mb-6">
-          {event.title}
-        </h1>
+        <div className="flex items-start justify-between gap-4 mb-6">
+          <h1 className="text-3xl md:text-4xl font-bold text-neutral-900">
+            {event.title}
+          </h1>
+          {user && (
+            <Button
+              variant={isSaved ? "default" : "outline"}
+              onClick={() => toggleSave.mutate()}
+              disabled={toggleSave.isPending}
+              className="shrink-0"
+            >
+              {isSaved ? (
+                <>
+                  <BookmarkCheck className="h-4 w-4 mr-2" />
+                  Saved
+                </>
+              ) : (
+                <>
+                  <Bookmark className="h-4 w-4 mr-2" />
+                  Save
+                </>
+              )}
+            </Button>
+          )}
+        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8 text-neutral-700">
           <div className="flex items-start">
