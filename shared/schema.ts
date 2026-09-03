@@ -165,6 +165,21 @@ export const attractions = pgTable("attractions", {
   isSkywalkAccessible: boolean("is_skywalk_accessible"),
 });
 
+/**
+ * Kinds of family destination. Grouped in one table because a parent deciding
+ * where to take a four-year-old on a Saturday is choosing between all of them,
+ * not browsing separate categories.
+ */
+export const PLAYGROUND_KINDS = [
+  "playground",
+  "splash_pad",
+  "indoor_play",
+  "library",
+  "nature_center",
+] as const;
+
+export type PlaygroundKind = (typeof PLAYGROUND_KINDS)[number];
+
 export const playgrounds = pgTable("playgrounds", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   // URL identity for this place's own page. Nullable so the column can be
@@ -188,6 +203,9 @@ export const playgrounds = pgTable("playgrounds", {
   hasShade: boolean("has_shade"),
   hasRestrooms: boolean("has_restrooms"),
   isFenced: boolean("is_fenced"),
+  kind: text("kind").notNull().default("playground"),
+  /** When it is actually open, for the seasonal ones. */
+  seasonOpen: text("season_open"),
 });
 
 export const users = pgTable("users", {
@@ -264,10 +282,14 @@ export const insertAttractionSchema = createInsertSchema(attractions).omit({
   slug: true,
 });
 
-export const insertPlaygroundSchema = createInsertSchema(playgrounds).omit({
-  id: true,
-  slug: true,
-});
+export const insertPlaygroundSchema = createInsertSchema(playgrounds)
+  .omit({
+    id: true,
+    slug: true,
+  })
+  .extend({
+    kind: z.enum(PLAYGROUND_KINDS).optional(),
+  });
 
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,

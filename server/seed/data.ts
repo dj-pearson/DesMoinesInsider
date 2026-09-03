@@ -1,7 +1,6 @@
 import type {
   InsertAttraction,
   InsertEvent,
-  InsertPlayground,
   InsertRestaurant,
 } from "@shared/schema";
 
@@ -96,53 +95,9 @@ export const seedAttractions: InsertAttraction[] = [
   },
 ];
 
-export const seedPlaygrounds: InsertPlayground[] = [
-  {
-    name: "Gray's Lake Park",
-    features: "Lake views, trails, playground",
-    description: "Beautiful park with playground equipment and lake access",
-    location: "Des Moines",
-    ageRange: "All ages",
-    searchCount: 90,
-    isIndoor: false,
-    hasSplashPad: false,
-    hasShade: true,
-    hasRestrooms: true,
-    isFenced: false,
-    imageUrl:
-      "https://images.unsplash.com/photo-1576671081837-49000212a370?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&h=400",
-  },
-  {
-    name: "Raccoon River Park",
-    features: "Beach, water play, nature lodge",
-    description: "Large park with beach area and water playground",
-    location: "West Des Moines",
-    ageRange: "All ages",
-    searchCount: 80,
-    isIndoor: false,
-    hasSplashPad: true,
-    hasShade: true,
-    hasRestrooms: true,
-    isFenced: false,
-    imageUrl:
-      "https://images.unsplash.com/photo-1544551763-46a013bb70d5?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&h=400",
-  },
-  {
-    name: "Walnut Creek Park",
-    features: "Adventure course",
-    description: "Adventure playground with climbing structures",
-    location: "West Des Moines",
-    ageRange: "5-12 years",
-    searchCount: 70,
-    isIndoor: false,
-    hasSplashPad: false,
-    hasShade: false,
-    hasRestrooms: false,
-    isFenced: false,
-    imageUrl:
-      "https://images.unsplash.com/photo-1567653418876-5bb0e566e1c2?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&h=400",
-  },
-];
+// Playgrounds and the other family destinations now live in ./family.ts, which
+// covers splash pads, indoor play, libraries and nature centers alongside them.
+export { seedFamilyPlaces as seedPlaygrounds } from "./family";
 
 /**
  * Built as a function so the dates are computed at seed time rather than at

@@ -353,7 +353,7 @@
         "Header nav gains a 'Family' link.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-013",

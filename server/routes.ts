@@ -8,6 +8,7 @@ import cron from "node-cron";
 import {
   getTonightRange,
   getWeekendRange,
+  getZonedParts,
   weekendDayFor,
 } from "@shared/weekend.js";
 import { requireAdmin } from "./middleware/auth.js";
@@ -401,6 +402,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to update playground search:", error);
       res.status(500).json({ message: "Failed to update search count" });
+    }
+  });
+
+  // Everything the family hub needs, in one request: kid-friendly free events
+  // for the coming weekend plus the curated destinations grouped by kind.
+  app.get("/api/family", async (_req, res) => {
+    try {
+      const now = new Date();
+      const weekend = getWeekendRange(now);
+
+      const [weekendEvents, places, neighborhoods] = await Promise.all([
+        storage.getEventsBetween(weekend.start, weekend.end),
+        storage.getPlaygrounds(),
+        storage.getNeighborhoods(),
+      ]);
+
+      // Both flags must be positively true. An event with unknown
+      // kid-friendliness is not something to send a family to.
+      const freeThisWeekend = weekendEvents.filter(
+        (event) => event.isFree === true && event.isKidFriendly === true,
+      );
+
+      res.json({
+        // The Des Moines month, so the seasonal sections do not flip a day
+        // early or late for a server running elsewhere.
+        month: getZonedParts(now).month,
+        freeThisWeekend,
+        places,
+        neighborhoods,
+      });
+    } catch (error) {
+      console.error("Failed to build family hub:", error);
+      res.status(500).json({ message: "Failed to fetch family content" });
     }
   });
 

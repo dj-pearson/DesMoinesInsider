@@ -174,6 +174,9 @@ export interface IStorage {
 
   /** Give any restaurant opening still missing a slug one. */
   backfillOpeningSlugs(): Promise<number>;
+
+  /** Add any family destinations not already present. Safe to call repeatedly. */
+  topUpFamilyPlaces(): Promise<number>;
 }
 
 /** Filter sentinels the client sends when a dropdown is left on its default. */
@@ -923,6 +926,28 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  /**
+   * Add family destinations that are not in the table yet.
+   *
+   * Unlike the one-shot content seed this runs on every boot, so expanding the
+   * curated list reaches existing installs rather than only fresh ones.
+   */
+  async topUpFamilyPlaces(): Promise<number> {
+    const rows = await this.db.select({ slug: playgrounds.slug }).from(playgrounds);
+    const known = new Set(
+      rows.map((row) => row.slug).filter((slug): slug is string => Boolean(slug)),
+    );
+
+    let added = 0;
+    for (const place of seedPlaygrounds) {
+      if (known.has(buildPlaceSlug(place.name))) continue;
+      await this.createPlayground(place);
+      added += 1;
+    }
+
+    return added;
+  }
+
   async seedIfEmpty(): Promise<void> {
     await this.seedNeighborhoodsIfEmpty();
     await this.seedTentpolesAndRefreshDates();
@@ -1505,6 +1530,8 @@ export class MemStorage implements IStorage {
       hasShade: insertPlayground.hasShade ?? null,
       hasRestrooms: insertPlayground.hasRestrooms ?? null,
       isFenced: insertPlayground.isFenced ?? null,
+      kind: insertPlayground.kind ?? "playground",
+      seasonOpen: insertPlayground.seasonOpen ?? null,
       id,
     };
     this.playgrounds.set(id, playground);
@@ -1579,6 +1606,23 @@ export class MemStorage implements IStorage {
 
   async backfillOpeningSlugs(): Promise<number> {
     return this.backfillPlaceMap(this.restaurantOpenings);
+  }
+
+  async topUpFamilyPlaces(): Promise<number> {
+    const known = new Set(
+      Array.from(this.playgrounds.values())
+        .map((row) => row.slug)
+        .filter((slug): slug is string => Boolean(slug)),
+    );
+
+    let added = 0;
+    for (const place of seedPlaygrounds) {
+      if (known.has(buildPlaceSlug(place.name))) continue;
+      await this.createPlayground(place);
+      added += 1;
+    }
+
+    return added;
   }
 
   async createRestaurantOpening(
@@ -1845,6 +1889,11 @@ export async function initializeStorage(): Promise<void> {
     const filledPlaces = await storage.backfillPlaceSlugs();
     if (filledPlaces > 0) {
       console.log(`[storage] Backfilled slugs for ${filledPlaces} place(s).`);
+    }
+
+    const addedPlaces = await storage.topUpFamilyPlaces();
+    if (addedPlaces > 0) {
+      console.log(`[storage] Added ${addedPlaces} family destination(s).`);
     }
 
     const filledOpenings = await storage.backfillOpeningSlugs();
