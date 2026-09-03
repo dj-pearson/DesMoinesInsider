@@ -416,6 +416,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin only: this inserts arbitrary content that renders on the public site.
+  app.get("/api/restaurant-openings/slug/:slug", async (req, res) => {
+    try {
+      const opening = await storage.getRestaurantOpeningBySlug(req.params.slug);
+      if (!opening) {
+        return res.status(404).json({ message: "Not found" });
+      }
+      res.json(opening);
+    } catch (error) {
+      console.error("Failed to get restaurant opening:", error);
+      res.status(500).json({ message: "Failed to fetch" });
+    }
+  });
+
   app.post("/api/restaurant-openings", requireAdmin, async (req, res) => {
     try {
       const result = insertRestaurantOpeningSchema.safeParse(req.body);

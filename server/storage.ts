@@ -150,6 +150,7 @@ export interface IStorage {
 
   // Restaurant Openings
   getRestaurantOpenings(): Promise<RestaurantOpening[]>;
+  getRestaurantOpeningBySlug(slug: string): Promise<RestaurantOpening | undefined>;
   createRestaurantOpening(opening: InsertRestaurantOpening): Promise<RestaurantOpening>;
   createRestaurantOpenings(openings: InsertRestaurantOpening[]): Promise<RestaurantOpening[]>;
 
@@ -170,6 +171,9 @@ export interface IStorage {
 
   /** Fill in practical flags for rows that predate them. */
   backfillEventFlags(): Promise<number>;
+
+  /** Give any restaurant opening still missing a slug one. */
+  backfillOpeningSlugs(): Promise<number>;
 }
 
 /** Filter sentinels the client sends when a dropdown is left on its default. */
@@ -788,22 +792,75 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async getRestaurantOpeningBySlug(
+    slug: string,
+  ): Promise<RestaurantOpening | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(restaurantOpenings)
+      .where(eq(restaurantOpenings.slug, slug))
+      .limit(1);
+    return row;
+  }
+
   async createRestaurantOpenings(
     openings: InsertRestaurantOpening[],
   ): Promise<RestaurantOpening[]> {
     if (openings.length === 0) return [];
 
+    const existing = await this.db
+      .select({ slug: restaurantOpenings.slug })
+      .from(restaurantOpenings);
+    const taken = new Set(
+      existing.map((row) => row.slug).filter((slug): slug is string => Boolean(slug)),
+    );
+
     const prepared = await Promise.all(
-      openings.map(async (opening) => ({
-        ...opening,
-        neighborhoodId: await this.classify({
-          venue: opening.name,
-          location: opening.location,
-        }),
-      })),
+      openings.map(async (opening) => {
+        const slug = ensureUniqueSlug(buildPlaceSlug(opening.name), taken);
+        taken.add(slug);
+        return {
+          ...opening,
+          slug,
+          neighborhoodId: await this.classify({
+            venue: opening.name,
+            location: opening.location,
+            address: opening.address,
+            lat: opening.lat,
+            lng: opening.lng,
+          }),
+        };
+      }),
     );
 
     return this.db.insert(restaurantOpenings).values(prepared).returning();
+  }
+
+  async backfillOpeningSlugs(): Promise<number> {
+    const missing = await this.db
+      .select({ id: restaurantOpenings.id, name: restaurantOpenings.name })
+      .from(restaurantOpenings)
+      .where(or(isNull(restaurantOpenings.slug), eq(restaurantOpenings.slug, "")));
+
+    if (missing.length === 0) return 0;
+
+    const rows = await this.db
+      .select({ slug: restaurantOpenings.slug })
+      .from(restaurantOpenings);
+    const taken = new Set(
+      rows.map((row) => row.slug).filter((slug): slug is string => Boolean(slug)),
+    );
+
+    for (const row of missing) {
+      const slug = ensureUniqueSlug(buildPlaceSlug(row.name), taken);
+      taken.add(slug);
+      await this.db
+        .update(restaurantOpenings)
+        .set({ slug })
+        .where(eq(restaurantOpenings.id, row.id));
+    }
+
+    return missing.length;
   }
 
   /**
@@ -1014,6 +1071,9 @@ export class DatabaseStorage implements IStorage {
         id: restaurantOpenings.id,
         name: restaurantOpenings.name,
         location: restaurantOpenings.location,
+        address: restaurantOpenings.address,
+        lat: restaurantOpenings.lat,
+        lng: restaurantOpenings.lng,
       })
       .from(restaurantOpenings)
       .where(isNull(restaurantOpenings.neighborhoodId));
@@ -1022,6 +1082,9 @@ export class DatabaseStorage implements IStorage {
       const neighborhoodId = await this.classify({
         venue: row.name,
         location: row.location,
+        address: row.address,
+        lat: row.lat,
+        lng: row.lng,
       });
       if (!neighborhoodId) continue;
       await this.db
@@ -1506,12 +1569,29 @@ export class MemStorage implements IStorage {
     });
   }
 
+  async getRestaurantOpeningBySlug(
+    slug: string,
+  ): Promise<RestaurantOpening | undefined> {
+    return Array.from(this.restaurantOpenings.values()).find(
+      (row) => row.slug === slug,
+    );
+  }
+
+  async backfillOpeningSlugs(): Promise<number> {
+    return this.backfillPlaceMap(this.restaurantOpenings);
+  }
+
   async createRestaurantOpening(
     insertOpening: InsertRestaurantOpening,
   ): Promise<RestaurantOpening> {
     const id = randomUUID();
     const opening: RestaurantOpening = {
       ...insertOpening,
+      slug: this.freePlaceSlug(this.restaurantOpenings.values(), insertOpening.name),
+      address: insertOpening.address ?? null,
+      lat: insertOpening.lat ?? null,
+      lng: insertOpening.lng ?? null,
+      firstLookTip: insertOpening.firstLookTip ?? null,
       neighborhoodId: this.classify({
         venue: insertOpening.name,
         location: insertOpening.location,
@@ -1765,6 +1845,11 @@ export async function initializeStorage(): Promise<void> {
     const filledPlaces = await storage.backfillPlaceSlugs();
     if (filledPlaces > 0) {
       console.log(`[storage] Backfilled slugs for ${filledPlaces} place(s).`);
+    }
+
+    const filledOpenings = await storage.backfillOpeningSlugs();
+    if (filledOpenings > 0) {
+      console.log(`[storage] Backfilled slugs for ${filledOpenings} opening(s).`);
     }
 
     const recategorized = await storage.backfillCategories();

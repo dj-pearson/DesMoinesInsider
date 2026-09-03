@@ -202,6 +202,22 @@ export const newsletterSubscriptions = pgTable("newsletter_subscriptions", {
   subscribedAt: timestamp("subscribed_at").defaultNow(),
 });
 
+/**
+ * Lifecycle of a restaurant, opening through closing.
+ *
+ * Closings are tracked alongside openings because locals care about them just
+ * as much, and no one else in this market publishes them.
+ */
+export const OPENING_STATUSES = [
+  "announced",
+  "opening_soon",
+  "newly_opened",
+  "closing_soon",
+  "closed",
+] as const;
+
+export type OpeningStatus = (typeof OPENING_STATUSES)[number];
+
 export const restaurantOpenings = pgTable("restaurant_openings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -213,8 +229,14 @@ export const restaurantOpenings = pgTable("restaurant_openings", {
   location: text("location"),
   cuisine: text("cuisine"),
   openingDate: timestamp("opening_date"),
-  status: text("status").notNull(), // 'opening_soon' | 'newly_opened' | 'announced'
+  status: text("status").notNull(),
   sourceUrl: text("source_url"),
+  slug: text("slug").unique(),
+  address: text("address"),
+  lat: doublePrecision("lat"),
+  lng: doublePrecision("lng"),
+  /** One line of first-hand context: what to order, when to avoid. */
+  firstLookTip: text("first_look_tip"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -256,11 +278,16 @@ export const insertNewsletterSchema = createInsertSchema(newsletterSubscriptions
   subscribedAt: true,
 });
 
-export const insertRestaurantOpeningSchema = createInsertSchema(restaurantOpenings).omit({
-  id: true,
-  createdAt: true,
-  neighborhoodId: true,
-});
+export const insertRestaurantOpeningSchema = createInsertSchema(restaurantOpenings)
+  .omit({
+    id: true,
+    createdAt: true,
+    neighborhoodId: true,
+    slug: true,
+  })
+  .extend({
+    status: z.enum(OPENING_STATUSES),
+  });
 
 export const insertNeighborhoodSchema = createInsertSchema(neighborhoods).omit({
   id: true,

@@ -1,3 +1,5 @@
+import { classifyOpeningStatus } from '@shared/openingStatus.js';
+import type { OpeningStatus } from '@shared/schema.js';
 import puppeteer from "puppeteer";
 
 export interface ScrapedEvent {
@@ -19,7 +21,7 @@ export interface ScrapedRestaurant {
   openingDate?: Date;
   sourceUrl: string;
   cuisine?: string;
-  status: 'opening_soon' | 'newly_opened' | 'announced';
+  status: OpeningStatus;
 }
 
 export async function scrapeGoogleEvents(query: string = "events in Des Moines Iowa"): Promise<ScrapedEvent[]> {
@@ -447,7 +449,7 @@ async function scrapeGenericVenue(url: string, venueName: string, category: stri
 }
 
 // Restaurant scraper for DSM Magazine
-export async function scrapeDSMMagazineRestaurants(): Promise<ScrapedRestaurant[]> {
+async function scrapeDSMMagazineSearch(searchUrl: string): Promise<ScrapedRestaurant[]> {
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -460,7 +462,7 @@ export async function scrapeDSMMagazineRestaurants(): Promise<ScrapedRestaurant[
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     
     // Search for recent restaurant articles
-    await page.goto('https://dsmmagazine.com/?s=new+restaurant+opening', { waitUntil: 'networkidle2' });
+    await page.goto(searchUrl, { waitUntil: 'networkidle2' });
 
     const restaurants = await page.evaluate(() => {
       const articles = document.querySelectorAll('article, .post, .entry');
@@ -498,7 +500,7 @@ export async function scrapeDSMMagazineRestaurants(): Promise<ScrapedRestaurant[
                 location: 'Des Moines, IA',
                 openingDate,
                 sourceUrl: url ? (url.startsWith('http') ? url : `https://dsmmagazine.com${url}`) : '',
-                status: 'newly_opened'
+                status: 'newly_opened' // refined from the headline after extraction
               });
             }
           }
@@ -522,7 +524,7 @@ export async function scrapeDSMMagazineRestaurants(): Promise<ScrapedRestaurant[
 }
 
 // Restaurant scraper for Des Moines Register
-export async function scrapeDesMoinesRegisterRestaurants(): Promise<ScrapedRestaurant[]> {
+async function scrapeRegisterSearch(searchUrl: string): Promise<ScrapedRestaurant[]> {
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -535,7 +537,7 @@ export async function scrapeDesMoinesRegisterRestaurants(): Promise<ScrapedResta
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     
     // Search for recent restaurant articles
-    await page.goto('https://www.desmoinesregister.com/search/?q=new%20restaurant%20des%20moines', { waitUntil: 'networkidle2' });
+    await page.goto(searchUrl, { waitUntil: 'networkidle2' });
 
     const restaurants = await page.evaluate(() => {
       const articles = document.querySelectorAll('article, .gnt_se_a, .search-result');
@@ -563,7 +565,7 @@ export async function scrapeDesMoinesRegisterRestaurants(): Promise<ScrapedResta
                 location: 'Des Moines, IA',
                 openingDate: new Date(),
                 sourceUrl: url ? (url.startsWith('http') ? url : `https://www.desmoinesregister.com${url}`) : '',
-                status: 'newly_opened'
+                status: 'newly_opened' // refined from the headline after extraction
               });
             }
           }
@@ -606,6 +608,55 @@ export function deduplicateEvents(existingEvents: ScrapedEvent[], newEvents: Scr
 }
 
 // Master scraping function
+/**
+ * Search a source for both openings and closings.
+ *
+ * Two passes rather than one because the sites index them under different
+ * language. Each item's status is then read from its own headline, since a
+ * single search returns a mix: a "new restaurants" page still surfaces
+ * "X has closed" stories.
+ */
+async function searchBoth(
+  scrape: (url: string) => Promise<ScrapedRestaurant[]>,
+  openingUrl: string,
+  closingUrl: string,
+): Promise<ScrapedRestaurant[]> {
+  const results: ScrapedRestaurant[] = [];
+
+  for (const url of [openingUrl, closingUrl]) {
+    try {
+      const batch = await scrape(url);
+      for (const item of batch) {
+        const status = classifyOpeningStatus(item.name, item.description);
+        // An item whose headline says nothing useful is dropped rather than
+        // filed under a status we guessed.
+        if (!status) continue;
+        results.push({ ...item, status });
+      }
+    } catch (error) {
+      console.error(`Restaurant search failed for ${url}:`, error);
+    }
+  }
+
+  return results;
+}
+
+export async function scrapeDSMMagazineRestaurants(): Promise<ScrapedRestaurant[]> {
+  return searchBoth(
+    scrapeDSMMagazineSearch,
+    'https://dsmmagazine.com/?s=new+restaurant+opening',
+    'https://dsmmagazine.com/?s=restaurant+closing',
+  );
+}
+
+export async function scrapeDesMoinesRegisterRestaurants(): Promise<ScrapedRestaurant[]> {
+  return searchBoth(
+    scrapeRegisterSearch,
+    'https://www.desmoinesregister.com/search/?q=new%20restaurant%20des%20moines',
+    'https://www.desmoinesregister.com/search/?q=restaurant%20closing%20des%20moines',
+  );
+}
+
 export async function scrapeAllSources(): Promise<{
   events: ScrapedEvent[];
   restaurants: ScrapedRestaurant[];

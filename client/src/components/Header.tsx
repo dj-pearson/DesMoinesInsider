@@ -24,7 +24,7 @@ export default function Header() {
             <a href="#events" className="text-neutral-500 hover:text-primary transition-colors">Events</a>
             <a href="/neighborhoods" className="text-neutral-500 hover:text-primary transition-colors">Neighborhoods</a>
             <a href="/guides" className="text-neutral-500 hover:text-primary transition-colors">Guides</a>
-            <a href="#restaurants" className="text-neutral-500 hover:text-primary transition-colors">Restaurants</a>
+            <a href="/openings" className="text-neutral-500 hover:text-primary transition-colors">Openings</a>
             <a href="#attractions" className="text-neutral-500 hover:text-primary transition-colors">Attractions</a>
             <a href="#about" className="text-neutral-500 hover:text-primary transition-colors">About</a>
           </nav>
@@ -47,7 +47,7 @@ export default function Header() {
               <a href="#events" className="text-neutral-500 hover:text-primary transition-colors py-2">Events</a>
               <a href="/neighborhoods" className="text-neutral-500 hover:text-primary transition-colors py-2">Neighborhoods</a>
               <a href="/guides" className="text-neutral-500 hover:text-primary transition-colors py-2">Guides</a>
-              <a href="#restaurants" className="text-neutral-500 hover:text-primary transition-colors py-2">Restaurants</a>
+              <a href="/openings" className="text-neutral-500 hover:text-primary transition-colors py-2">Openings</a>
               <a href="#attractions" className="text-neutral-500 hover:text-primary transition-colors py-2">Attractions</a>
               <a href="#about" className="text-neutral-500 hover:text-primary transition-colors py-2">About</a>
             </nav>

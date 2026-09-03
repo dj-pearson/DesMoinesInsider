@@ -32,6 +32,7 @@ interface KeywordRule {
  * Priority tiers:
  *   30  a named venue or landmark, which pins a location exactly
  *   20  a district inside a larger city, checked before that city
+ *   12  the neighborhood named outright, which beats a street inference
  *   10  a street or corridor name
  *    5  a bare city name
  */
@@ -98,6 +99,24 @@ const KEYWORD_RULES: KeywordRule[] = [
   { slug: "merle-hay", priority: 10, keywords: ["merle hay road", "merle hay rd"] },
   { slug: "sherman-hill", priority: 10, keywords: ["woodland ave", "center street"] },
   { slug: "east-village", priority: 10, keywords: ["east locust", "e locust", "east grand"] },
+
+  // ---- the neighborhood's own name (priority 12) ---------------------------
+  // Someone naming the neighborhood outright beats a street-name inference:
+  // Gateway Market is on Woodland Avenue, which reads as Sherman Hill, but its
+  // listing says Western Gateway and that is the authoritative signal.
+  // This tier was missing entirely, so "Sherman Hill" matched nothing at all
+  // because only "Hoyt Sherman" and its streets were listed.
+  { slug: "sherman-hill", priority: 12, keywords: ["sherman hill"] },
+  { slug: "merle-hay", priority: 12, keywords: ["merle hay"] },
+  { slug: "south-side", priority: 12, keywords: ["south side", "southside"] },
+  { slug: "western-gateway", priority: 12, keywords: ["western gateway"] },
+  { slug: "highland-park", priority: 12, keywords: ["highland park"] },
+  { slug: "grays-lake", priority: 12, keywords: ["gray's lake", "grays lake"] },
+  { slug: "east-village", priority: 12, keywords: ["east village"] },
+  { slug: "court-avenue", priority: 12, keywords: ["court avenue", "court ave"] },
+  { slug: "drake", priority: 12, keywords: ["drake neighborhood", "dogtown"] },
+  { slug: "beaverdale", priority: 12, keywords: ["beaverdale"] },
+  { slug: "ingersoll", priority: 12, keywords: ["ingersoll"] },
 
   // ---- bare city names (priority 5) ---------------------------------------
   { slug: "west-des-moines", priority: 5, keywords: ["west des moines", "wdm"] },

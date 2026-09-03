@@ -331,7 +331,7 @@
         "Home page keeps a compact 'Latest Openings' strip that links to `/openings`.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-012",
