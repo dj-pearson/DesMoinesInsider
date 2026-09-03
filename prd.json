@@ -279,7 +279,7 @@
         "The page is linked from the Header and from the home hero.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-010",

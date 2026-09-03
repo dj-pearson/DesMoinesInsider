@@ -20,6 +20,7 @@ export default function Header() {
           </div>
           
           <nav className="hidden md:flex space-x-8">
+            <a href="/this-weekend" className="text-neutral-500 hover:text-primary transition-colors">This Weekend</a>
             <a href="#events" className="text-neutral-500 hover:text-primary transition-colors">Events</a>
             <a href="/neighborhoods" className="text-neutral-500 hover:text-primary transition-colors">Neighborhoods</a>
             <a href="#restaurants" className="text-neutral-500 hover:text-primary transition-colors">Restaurants</a>
@@ -41,6 +42,7 @@ export default function Header() {
         {isMenuOpen && (
           <div className="md:hidden pb-4">
             <nav className="flex flex-col space-y-2">
+              <a href="/this-weekend" className="text-neutral-500 hover:text-primary transition-colors py-2">This Weekend</a>
               <a href="#events" className="text-neutral-500 hover:text-primary transition-colors py-2">Events</a>
               <a href="/neighborhoods" className="text-neutral-500 hover:text-primary transition-colors py-2">Neighborhoods</a>
               <a href="#restaurants" className="text-neutral-500 hover:text-primary transition-colors py-2">Restaurants</a>

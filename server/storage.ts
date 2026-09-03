@@ -34,6 +34,7 @@ import {
   ilike,
   isNotNull,
   isNull,
+  lt,
   lte,
   or,
   sql,
@@ -99,6 +100,8 @@ export interface IStorage {
   createEvent(event: InsertEvent): Promise<Event>;
   createEvents(events: InsertEvent[]): Promise<Event[]>;
   getFeaturedEvents(limit?: number): Promise<Event[]>;
+  /** Events starting within a window, ascending. Used by the weekend view. */
+  getEventsBetween(start: Date, end: Date): Promise<Event[]>;
 
   // Restaurants
   getRestaurants(): Promise<Restaurant[]>;
@@ -533,6 +536,16 @@ export class DatabaseStorage implements IStorage {
       .where(gte(events.date, new Date()))
       .orderBy(asc(events.date))
       .limit(limit);
+  }
+
+  async getEventsBetween(start: Date, end: Date): Promise<Event[]> {
+    return this.db
+      .select()
+      .from(events)
+      // End is exclusive: the window's end is the next day's midnight, and an
+      // event starting exactly then belongs to that day, not this one.
+      .where(and(gte(events.date, start), lt(events.date, end)))
+      .orderBy(asc(events.date));
   }
 
   // Restaurants
@@ -1139,6 +1152,15 @@ export class MemStorage implements IStorage {
       .filter((event) => new Date(event.date) >= new Date())
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
       .slice(0, limit);
+  }
+
+  async getEventsBetween(start: Date, end: Date): Promise<Event[]> {
+    return Array.from(this.events.values())
+      .filter((event) => {
+        const at = new Date(event.date);
+        return at >= start && at < end;
+      })
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   }
 
   // Restaurants

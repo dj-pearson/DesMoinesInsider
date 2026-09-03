@@ -5,6 +5,11 @@ import { scrapeAllSources, deduplicateEvents } from "./services/scraper.js";
 import { enhanceEvents } from "./services/eventEnhancer.js";
 import { insertNewsletterSchema, insertRestaurantOpeningSchema } from "@shared/schema.js";
 import cron from "node-cron";
+import {
+  getTonightRange,
+  getWeekendRange,
+  weekendDayFor,
+} from "@shared/weekend.js";
 import { requireAdmin } from "./middleware/auth.js";
 import {
   apiWriteLimiter,
@@ -143,6 +148,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to get featured events:", error);
       res.status(500).json({ message: "Failed to fetch featured events" });
+    }
+  });
+
+  // Registered before /api/events/:id so the literal path segment is not read
+  // as an id. All windows are computed in Des Moines time, not the server's.
+  app.get("/api/events/this-weekend", async (_req, res) => {
+    try {
+      const now = new Date();
+      const weekend = getWeekendRange(now);
+      const tonight = getTonightRange(now);
+
+      const [weekendEvents, tonightEvents] = await Promise.all([
+        storage.getEventsBetween(weekend.start, weekend.end),
+        storage.getEventsBetween(tonight.start, tonight.end),
+      ]);
+
+      const days = weekend.days.map((day) => ({
+        label: day.label,
+        date: day.date,
+        events: weekendEvents.filter(
+          (event) => weekendDayFor(new Date(event.date), weekend)?.date === day.date,
+        ),
+      }));
+
+      res.json({
+        weekendInProgress: weekend.inProgress,
+        range: { start: weekend.start, end: weekend.end },
+        tonight: { range: tonight, events: tonightEvents },
+        days,
+      });
+    } catch (error) {
+      console.error("Failed to get this weekend:", error);
+      res.status(500).json({ message: "Failed to fetch this weekend" });
     }
   });
 
