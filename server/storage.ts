@@ -145,8 +145,16 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
 
   // Newsletter
-  subscribeNewsletter(subscription: InsertNewsletterSubscription): Promise<NewsletterSubscription>;
+  subscribeNewsletter(
+    subscription: InsertNewsletterSubscription,
+    confirmToken: string,
+  ): Promise<NewsletterSubscription>;
   getNewsletterSubscriptions(): Promise<NewsletterSubscription[]>;
+  /** Only confirmed, still-subscribed addresses. The send list. */
+  getConfirmedSubscribers(): Promise<NewsletterSubscription[]>;
+  getSubscriptionByToken(token: string): Promise<NewsletterSubscription | undefined>;
+  confirmSubscription(token: string): Promise<NewsletterSubscription | undefined>;
+  unsubscribe(token: string): Promise<NewsletterSubscription | undefined>;
 
   // Restaurant Openings
   getRestaurantOpenings(): Promise<RestaurantOpening[]>;
@@ -765,12 +773,66 @@ export class DatabaseStorage implements IStorage {
   // Newsletter
   async subscribeNewsletter(
     subscription: InsertNewsletterSubscription,
+    confirmToken: string,
   ): Promise<NewsletterSubscription> {
+    // Re-subscribing after unsubscribing should work, and a second signup
+    // before confirming should re-send rather than fail on the unique email.
     const [created] = await this.db
       .insert(newsletterSubscriptions)
-      .values(subscription)
+      .values({ ...subscription, confirmToken })
+      .onConflictDoUpdate({
+        target: newsletterSubscriptions.email,
+        set: {
+          confirmToken,
+          unsubscribedAt: null,
+          neighborhoodId: subscription.neighborhoodId ?? null,
+        },
+      })
       .returning();
     return created;
+  }
+
+  async getConfirmedSubscribers(): Promise<NewsletterSubscription[]> {
+    return this.db
+      .select()
+      .from(newsletterSubscriptions)
+      .where(
+        and(
+          isNotNull(newsletterSubscriptions.confirmedAt),
+          isNull(newsletterSubscriptions.unsubscribedAt),
+        ),
+      );
+  }
+
+  async getSubscriptionByToken(
+    token: string,
+  ): Promise<NewsletterSubscription | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(newsletterSubscriptions)
+      .where(eq(newsletterSubscriptions.confirmToken, token))
+      .limit(1);
+    return row;
+  }
+
+  async confirmSubscription(
+    token: string,
+  ): Promise<NewsletterSubscription | undefined> {
+    const [row] = await this.db
+      .update(newsletterSubscriptions)
+      .set({ confirmedAt: new Date(), unsubscribedAt: null })
+      .where(eq(newsletterSubscriptions.confirmToken, token))
+      .returning();
+    return row;
+  }
+
+  async unsubscribe(token: string): Promise<NewsletterSubscription | undefined> {
+    const [row] = await this.db
+      .update(newsletterSubscriptions)
+      .set({ unsubscribedAt: new Date() })
+      .where(eq(newsletterSubscriptions.confirmToken, token))
+      .returning();
+    return row;
   }
 
   async getNewsletterSubscriptions(): Promise<NewsletterSubscription[]> {
@@ -1565,12 +1627,22 @@ export class MemStorage implements IStorage {
   // Newsletter
   async subscribeNewsletter(
     subscription: InsertNewsletterSubscription,
+    confirmToken: string,
   ): Promise<NewsletterSubscription> {
-    const existing = Array.from(this.newsletterSubscriptions.values()).find(
-      (sub) => sub.email === subscription.email,
+    const existing = Array.from(this.newsletterSubscriptions.entries()).find(
+      ([, sub]) => sub.email === subscription.email,
     );
+
     if (existing) {
-      throw new Error("duplicate key value violates unique constraint");
+      const [existingId, sub] = existing;
+      const updated: NewsletterSubscription = {
+        ...sub,
+        confirmToken,
+        unsubscribedAt: null,
+        neighborhoodId: subscription.neighborhoodId ?? null,
+      };
+      this.newsletterSubscriptions.set(existingId, updated);
+      return updated;
     }
 
     const id = randomUUID();
@@ -1578,9 +1650,49 @@ export class MemStorage implements IStorage {
       ...subscription,
       id,
       subscribedAt: new Date(),
+      confirmToken,
+      confirmedAt: null,
+      unsubscribedAt: null,
+      neighborhoodId: subscription.neighborhoodId ?? null,
     };
     this.newsletterSubscriptions.set(id, newsletterSub);
     return newsletterSub;
+  }
+
+  async getConfirmedSubscribers(): Promise<NewsletterSubscription[]> {
+    return Array.from(this.newsletterSubscriptions.values()).filter(
+      (sub) => sub.confirmedAt && !sub.unsubscribedAt,
+    );
+  }
+
+  async getSubscriptionByToken(
+    token: string,
+  ): Promise<NewsletterSubscription | undefined> {
+    return Array.from(this.newsletterSubscriptions.values()).find(
+      (sub) => sub.confirmToken === token,
+    );
+  }
+
+  async confirmSubscription(
+    token: string,
+  ): Promise<NewsletterSubscription | undefined> {
+    for (const [id, sub] of Array.from(this.newsletterSubscriptions.entries())) {
+      if (sub.confirmToken !== token) continue;
+      const updated = { ...sub, confirmedAt: new Date(), unsubscribedAt: null };
+      this.newsletterSubscriptions.set(id, updated);
+      return updated;
+    }
+    return undefined;
+  }
+
+  async unsubscribe(token: string): Promise<NewsletterSubscription | undefined> {
+    for (const [id, sub] of Array.from(this.newsletterSubscriptions.entries())) {
+      if (sub.confirmToken !== token) continue;
+      const updated = { ...sub, unsubscribedAt: new Date() };
+      this.newsletterSubscriptions.set(id, updated);
+      return updated;
+    }
+    return undefined;
   }
 
   async getNewsletterSubscriptions(): Promise<NewsletterSubscription[]> {

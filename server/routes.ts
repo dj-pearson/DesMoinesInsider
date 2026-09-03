@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage.js";
 import { scrapeAllSources, deduplicateEvents } from "./services/scraper.js";
@@ -12,6 +12,12 @@ import {
   weekendDayFor,
 } from "@shared/weekend.js";
 import { requireAdmin } from "./middleware/auth.js";
+import {
+  createToken,
+  sendConfirmationEmail,
+  sendTestIssue,
+  sendWeeklyIssue,
+} from "./services/newsletter.js";
 import {
   apiWriteLimiter,
   expensiveOperationLimiter,
@@ -478,7 +484,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Newsletter endpoint
+  // Newsletter endpoints
   app.post("/api/newsletter/subscribe", newsletterLimiter, async (req, res) => {
     try {
       const result = insertNewsletterSchema.safeParse(req.body);
@@ -486,21 +492,83 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid email format" });
       }
 
-      const subscription = await storage.subscribeNewsletter(result.data);
-      res.json({ 
-        message: "Successfully subscribed to newsletter",
-        subscription: { email: subscription.email }
+      const token = createToken();
+      const subscription = await storage.subscribeNewsletter(result.data, token);
+
+      // Double opt-in: nothing is sent to this address until the link is
+      // clicked, so a typo or a malicious signup cannot subscribe someone else.
+      await sendConfirmationEmail(subscription);
+
+      res.json({
+        message: "Check your email to confirm your subscription",
+        subscription: { email: subscription.email },
       });
     } catch (error) {
       console.error("Failed to subscribe to newsletter:", error);
-      const errorMessage = error instanceof Error ? error.message : "";
-      if (errorMessage?.includes('unique')) {
-        res.status(400).json({ message: "Email already subscribed" });
-      } else {
-        res.status(500).json({ message: "Failed to subscribe to newsletter" });
-      }
+      res.status(500).json({ message: "Failed to subscribe to newsletter" });
     }
   });
+
+  app.get("/api/newsletter/confirm", async (req, res) => {
+    const token = typeof req.query.token === "string" ? req.query.token : "";
+    if (!token) return res.status(400).send("Missing token");
+
+    try {
+      const subscription = await storage.confirmSubscription(token);
+      if (!subscription) {
+        return res.status(404).send("That confirmation link is not valid.");
+      }
+      // Clicked from an email client, so answer with a page rather than JSON.
+      res.redirect("/?subscribed=1");
+    } catch (error) {
+      console.error("Failed to confirm subscription:", error);
+      res.status(500).send("Could not confirm your subscription.");
+    }
+  });
+
+  /** Both GET and POST: mail clients use POST for one-click unsubscribe. */
+  const handleUnsubscribe = async (req: Request, res: Response) => {
+    const token =
+      (typeof req.query.token === "string" && req.query.token) ||
+      (typeof req.body?.token === "string" && req.body.token) ||
+      "";
+    if (!token) return res.status(400).send("Missing token");
+
+    try {
+      const subscription = await storage.unsubscribe(token);
+      if (!subscription) {
+        return res.status(404).send("That unsubscribe link is not valid.");
+      }
+      res.send(
+        "You have been unsubscribed from Des Moines Insider. Nothing further will be sent.",
+      );
+    } catch (error) {
+      console.error("Failed to unsubscribe:", error);
+      res.status(500).send("Could not unsubscribe.");
+    }
+  };
+
+  app.get("/api/newsletter/unsubscribe", handleUnsubscribe);
+  app.post("/api/newsletter/unsubscribe", handleUnsubscribe);
+
+  // Admin only: sends the current issue to one address for a look before the
+  // Thursday run.
+  app.post(
+    "/api/newsletter/send-test",
+    requireAdmin,
+    expensiveOperationLimiter,
+    async (req, res) => {
+      const to = typeof req.body?.email === "string" ? req.body.email : "";
+      if (!to) return res.status(400).json({ message: "An email address is required" });
+
+      try {
+        res.json(await sendTestIssue(to));
+      } catch (error) {
+        console.error("Failed to send test issue:", error);
+        res.status(500).json({ message: "Failed to send test issue" });
+      }
+    },
+  );
 
   // Search endpoint
   app.get("/api/search", async (req, res) => {
@@ -584,6 +652,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Scheduled comprehensive scraping failed:", error);
     }
   });
+
+  // Thursday at 4pm Des Moines time: late enough that weekend plans are being
+  // made, early enough to still influence them.
+  cron.schedule(
+    "0 16 * * 4",
+    async () => {
+      console.log("Sending the weekly newsletter...");
+      try {
+        const report = await sendWeeklyIssue();
+        console.log(
+          report.skipped
+            ? `Newsletter skipped: ${report.skipped}`
+            : `Newsletter sent to ${report.sent} of ${report.attempted} subscriber(s)`,
+        );
+      } catch (error) {
+        console.error("Weekly newsletter send failed:", error);
+      }
+    },
+    { timezone: "America/Chicago" },
+  );
 
   const httpServer = createServer(app);
   return httpServer;

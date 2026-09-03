@@ -376,7 +376,7 @@
         "Newsletter component offers an optional neighborhood preference.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-014",

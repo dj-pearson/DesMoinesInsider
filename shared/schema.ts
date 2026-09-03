@@ -218,6 +218,14 @@ export const newsletterSubscriptions = pgTable("newsletter_subscriptions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email").notNull().unique(),
   subscribedAt: timestamp("subscribed_at").defaultNow(),
+  // Double opt-in: an address receives nothing until it confirms. The token
+  // also authorises unsubscribing, so a link cannot be used to unsubscribe
+  // someone else by guessing their address.
+  confirmToken: text("confirm_token"),
+  confirmedAt: timestamp("confirmed_at"),
+  unsubscribedAt: timestamp("unsubscribed_at"),
+  /** Optional: which part of the metro they care about most. */
+  neighborhoodId: varchar("neighborhood_id").references(() => neighborhoods.id),
 });
 
 /**
@@ -295,10 +303,18 @@ export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
 });
 
-export const insertNewsletterSchema = createInsertSchema(newsletterSubscriptions).omit({
-  id: true,
-  subscribedAt: true,
-});
+export const insertNewsletterSchema = createInsertSchema(newsletterSubscriptions)
+  .omit({
+    id: true,
+    subscribedAt: true,
+    confirmToken: true,
+    confirmedAt: true,
+    unsubscribedAt: true,
+  })
+  .extend({
+    email: z.string().email().max(320),
+    neighborhoodId: z.string().uuid().optional().nullable(),
+  });
 
 export const insertRestaurantOpeningSchema = createInsertSchema(restaurantOpenings)
   .omit({
