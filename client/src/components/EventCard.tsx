@@ -1,7 +1,7 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { MapPin, Calendar } from "lucide-react";
+import { Baby, Calendar, Footprints, Home, MapPin, Ticket } from "lucide-react";
 import { Event } from "@shared/schema";
 import { format } from "date-fns";
 
@@ -51,6 +51,37 @@ export default function EventCard({ event }: EventCardProps) {
           </span>
         </div>
         <h4 className="text-xl font-bold mb-2">{event.title}</h4>
+        {/* Only true flags show. An unknown flag stays silent rather than
+            rendering as a confident negative. */}
+        {(event.isFree || event.isKidFriendly || event.isIndoor ||
+          event.isSkywalkAccessible) && (
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {event.isFree && (
+              <Badge variant="secondary" className="text-xs font-medium">
+                <Ticket className="h-3 w-3 mr-1" />
+                Free
+              </Badge>
+            )}
+            {event.isKidFriendly && (
+              <Badge variant="secondary" className="text-xs font-medium">
+                <Baby className="h-3 w-3 mr-1" />
+                Kid-friendly
+              </Badge>
+            )}
+            {event.isIndoor && (
+              <Badge variant="secondary" className="text-xs font-medium">
+                <Home className="h-3 w-3 mr-1" />
+                Indoor
+              </Badge>
+            )}
+            {event.isSkywalkAccessible && (
+              <Badge variant="secondary" className="text-xs font-medium">
+                <Footprints className="h-3 w-3 mr-1" />
+                Skywalk
+              </Badge>
+            )}
+          </div>
+        )}
         <p className="text-neutral-500 mb-4 line-clamp-3">
           {event.enhancedDescription || event.originalDescription}
         </p>

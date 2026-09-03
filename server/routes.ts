@@ -111,11 +111,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/events", async (req, res) => {
     try {
       const { category, date, location, neighborhood } = req.query;
+      /** Only the literal string "true" enables a flag filter. */
+      const flag = (value: unknown) => value === "true";
+
       const filters = {
         category: category as string,
         date: date as string,
         location: location as string,
         neighborhood: neighborhood as string,
+        free: flag(req.query.free),
+        kids: flag(req.query.kids),
+        indoor: flag(req.query.indoor),
+        skywalk: flag(req.query.skywalk),
       };
       
       const events = await storage.getEvents(filters);

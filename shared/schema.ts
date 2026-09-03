@@ -86,6 +86,15 @@ export const events = pgTable("events", {
   venue: text("venue"),
   price: text("price"),
   isEnhanced: boolean("is_enhanced").default(false),
+  // Practical flags. Every one is nullable because "we do not know" is a real
+  // answer and must not be rendered as a confident "no": telling a parent an
+  // event is not kid-friendly when nobody checked is worse than staying quiet.
+  isFree: boolean("is_free"),
+  isKidFriendly: boolean("is_kid_friendly"),
+  ageRange: text("age_range"),
+  isIndoor: boolean("is_indoor"),
+  isSkywalkAccessible: boolean("is_skywalk_accessible"),
+  weatherBackup: text("weather_backup"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -123,6 +132,8 @@ export const attractions = pgTable("attractions", {
   imageUrl: text("image_url"),
   location: text("location"),
   searchCount: integer("search_count").default(0),
+  isIndoor: boolean("is_indoor"),
+  isSkywalkAccessible: boolean("is_skywalk_accessible"),
 });
 
 export const playgrounds = pgTable("playgrounds", {
@@ -141,6 +152,13 @@ export const playgrounds = pgTable("playgrounds", {
   location: text("location"),
   ageRange: text("age_range"),
   searchCount: integer("search_count").default(0),
+  isIndoor: boolean("is_indoor"),
+  isSkywalkAccessible: boolean("is_skywalk_accessible"),
+  // The details that decide whether a trip is worth it with small children.
+  hasSplashPad: boolean("has_splash_pad"),
+  hasShade: boolean("has_shade"),
+  hasRestrooms: boolean("has_restrooms"),
+  isFenced: boolean("is_fenced"),
 });
 
 export const users = pgTable("users", {

@@ -99,6 +99,13 @@ export interface EnhancedEventContent {
   description: string;
   category: EventCategory;
   secondaryCategories: EventCategory[];
+  /** Flags the model inferred. Null means it could not tell. */
+  flags: {
+    isFree: boolean | null;
+    isKidFriendly: boolean | null;
+    ageRange: string | null;
+    isIndoor: boolean | null;
+  };
 }
 
 /**
@@ -125,6 +132,7 @@ export async function enhanceAndCategorizeEvent(input: {
     description: input.description,
     category: fallbackCategory,
     secondaryCategories: [],
+    flags: { isFree: null, isKidFriendly: null, ageRange: null, isIndoor: null },
   };
 
   try {
@@ -160,7 +168,13 @@ Rules for the categories:
 - Use "Free" as a secondary category when the price is clearly free
 - Use "High School Sports" rather than "Sports" for high school events
 
-Respond as JSON: {"description": string, "category": string, "secondaryCategories": string[]}`,
+Rules for the flags. Use null whenever the text does not say, and do NOT guess:
+- "isFree": true only if attending costs nothing
+- "isKidFriendly": false for 21+ or adults-only events, true only if children are welcome
+- "ageRange": a short label like "All ages", "Ages 5-12" or "21+", else null
+- "isIndoor": true if it is held inside, false if outside, null if unclear
+
+Respond as JSON: {"description": string, "category": string, "secondaryCategories": string[], "isFree": boolean|null, "isKidFriendly": boolean|null, "ageRange": string|null, "isIndoor": boolean|null}`,
         },
       ],
       response_format: { type: "json_object" },
@@ -183,6 +197,12 @@ Respond as JSON: {"description": string, "category": string, "secondaryCategorie
       input.title,
     );
 
+    /** Accept only real booleans; anything else means the model was unsure. */
+    const asBool = (value: unknown): boolean | null =>
+      typeof value === "boolean" ? value : null;
+
+    const record = parsed as Record<string, unknown>;
+
     return {
       description:
         typeof parsed.description === "string" && parsed.description.trim().length > 0
@@ -193,6 +213,15 @@ Respond as JSON: {"description": string, "category": string, "secondaryCategorie
         parsed.secondaryCategories,
         category,
       ),
+      flags: {
+        isFree: asBool(record.isFree),
+        isKidFriendly: asBool(record.isKidFriendly),
+        ageRange:
+          typeof record.ageRange === "string" && record.ageRange.trim().length > 0
+            ? record.ageRange.trim().slice(0, 40)
+            : null,
+        isIndoor: asBool(record.isIndoor),
+      },
     };
   } catch (error) {
     console.error(`Failed to enhance and categorize "${input.title}":`, error);

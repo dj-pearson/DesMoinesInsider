@@ -2,6 +2,8 @@ import { enhanceAndCategorizeEvent } from './openai.js';
 import { ScrapedEvent } from './scraper.js';
 import { InsertEvent } from '@shared/schema.js';
 import { normalizeCategory } from '@shared/categories.js';
+import { extractEventFlags, mergeFlags } from '@shared/eventFlags.js';
+import { findVenueFacts } from '../data/venues.js';
 
 /**
  * Turn scraped events into rows ready for the database.
@@ -16,6 +18,17 @@ export async function enhanceEvents(
   const enhancedEvents: InsertEvent[] = [];
 
   for (const event of scrapedEvents) {
+    // Flags come from three sources, most trusted first: curated venue facts,
+    // then what the event text states outright, then the AI's inference.
+    const venueFacts = findVenueFacts(event.venue, event.location, event.title);
+    const textFlags = extractEventFlags({
+      title: event.title,
+      description: event.description,
+      price: event.price,
+      venue: event.venue,
+      location: event.location,
+    });
+
     const base = {
       title: event.title,
       originalDescription: event.description,
@@ -26,6 +39,8 @@ export async function enhanceEvents(
       imageUrl: event.imageUrl,
       venue: event.venue,
       price: event.price,
+      // Only a curated venue can assert skywalk access; nothing else knows.
+      isSkywalkAccessible: venueFacts?.isSkywalkAccessible ?? null,
     };
 
     try {
@@ -38,8 +53,15 @@ export async function enhanceEvents(
         rawCategory: event.category,
       });
 
+      const flags = mergeFlags(
+        venueFacts ? { isIndoor: venueFacts.isIndoor } : null,
+        textFlags,
+        result.flags,
+      );
+
       enhancedEvents.push({
         ...base,
+        ...flags,
         enhancedDescription: result.description,
         category: result.category,
         secondaryCategories: result.secondaryCategories,
@@ -51,6 +73,7 @@ export async function enhanceEvents(
 
       enhancedEvents.push({
         ...base,
+        ...mergeFlags(venueFacts ? { isIndoor: venueFacts.isIndoor } : null, textFlags),
         enhancedDescription: event.description,
         category: normalizeCategory(event.category, event.title),
         secondaryCategories: [],

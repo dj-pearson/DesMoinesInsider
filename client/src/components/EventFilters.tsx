@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import EventCard from "./EventCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EVENT_CATEGORIES, Event, Neighborhood } from "@shared/schema";
@@ -20,6 +21,11 @@ export default function EventFilters() {
   const [dateFilter, setDateFilter] = useState("All Dates");
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
   const [locationFilter, setLocationFilter] = useState("All Locations");
+  // Each toggle narrows to rows we positively know match. Off means "do not
+  // narrow", never "must be false".
+  const [freeOnly, setFreeOnly] = useState(false);
+  const [kidsOnly, setKidsOnly] = useState(false);
+  const [indoorOnly, setIndoorOnly] = useState(false);
 
   // The location list is data, not a hardcoded dropdown: it comes from the
   // neighborhoods table so districts and suburbs stay in one place.
@@ -40,6 +46,9 @@ export default function EventFilters() {
     const params = new URLSearchParams();
     if (categoryFilter !== "All Categories") params.append('category', categoryFilter);
     if (locationFilter !== "All Locations") params.append('neighborhood', locationFilter);
+    if (freeOnly) params.append('free', 'true');
+    if (kidsOnly) params.append('kids', 'true');
+    if (indoorOnly) params.append('indoor', 'true');
     if (dateFilter !== "All Dates") {
       const today = new Date();
       if (dateFilter === "Today") {
@@ -54,7 +63,15 @@ export default function EventFilters() {
   };
 
   const { data: events, isLoading, error } = useQuery<Event[]>({
-    queryKey: ['/api/events', dateFilter, categoryFilter, locationFilter],
+    queryKey: [
+      '/api/events',
+      dateFilter,
+      categoryFilter,
+      locationFilter,
+      freeOnly,
+      kidsOnly,
+      indoorOnly,
+    ],
     queryFn: async () => {
       const params = buildQueryParams();
       const url = params ? `/api/events?${params}` : '/api/events';
@@ -68,6 +85,9 @@ export default function EventFilters() {
     setDateFilter("All Dates");
     setCategoryFilter("All Categories");
     setLocationFilter("All Locations");
+    setFreeOnly(false);
+    setKidsOnly(false);
+    setIndoorOnly(false);
   };
 
   if (error) {
@@ -155,6 +175,27 @@ export default function EventFilters() {
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          {/* Practical toggles. Each narrows to events we know match; leaving
+              one off does not exclude anything. */}
+          <div className="mt-4 pt-4 border-t flex flex-wrap gap-x-6 gap-y-3">
+            {[
+              { id: "free-only", label: "Free only", checked: freeOnly, set: setFreeOnly },
+              { id: "kids-only", label: "Kid-friendly", checked: kidsOnly, set: setKidsOnly },
+              { id: "indoor-only", label: "Indoor only", checked: indoorOnly, set: setIndoorOnly },
+            ].map((toggle) => (
+              <div key={toggle.id} className="flex items-center space-x-2">
+                <Switch
+                  id={toggle.id}
+                  checked={toggle.checked}
+                  onCheckedChange={toggle.set}
+                />
+                <Label htmlFor={toggle.id} className="cursor-pointer text-sm">
+                  {toggle.label}
+                </Label>
+              </div>
+            ))}
           </div>
         </div>
 

@@ -27,6 +27,8 @@ import {
 import { and, arrayContains, asc, desc, eq, gte, ilike, isNull, or, sql } from "drizzle-orm";
 import { buildEventSlug, buildPlaceSlug, ensureUniqueSlug } from "@shared/slug";
 import { isEventCategory, normalizeCategory } from "@shared/categories";
+import { extractEventFlags, mergeFlags } from "@shared/eventFlags";
+import { findVenueFacts } from "./data/venues";
 import { randomUUID } from "crypto";
 import { getDb, isDatabaseConfigured } from "./db";
 import {
@@ -62,6 +64,11 @@ export interface IStorage {
     location?: string;
     /** Neighborhood slug. Filters on the foreign key, not on location text. */
     neighborhood?: string;
+    /** Practical flags. Only true narrows; unknown rows are excluded. */
+    free?: boolean;
+    kids?: boolean;
+    indoor?: boolean;
+    skywalk?: boolean;
   }): Promise<Event[]>;
   getEvent(id: string): Promise<Event | undefined>;
   getEventBySlug(slug: string): Promise<Event | undefined>;
@@ -118,6 +125,9 @@ export interface IStorage {
 
   /** Rewrite legacy category values onto the current taxonomy. */
   backfillCategories(): Promise<number>;
+
+  /** Fill in practical flags for rows that predate them. */
+  backfillEventFlags(): Promise<number>;
 }
 
 /** Filter sentinels the client sends when a dropdown is left on its default. */
@@ -216,8 +226,20 @@ export class DatabaseStorage implements IStorage {
     date?: string;
     location?: string;
     neighborhood?: string;
+    free?: boolean;
+    kids?: boolean;
+    indoor?: boolean;
+    skywalk?: boolean;
   }): Promise<Event[]> {
     const conditions = [];
+
+    // These filters answer "show me only things I know are X". A row where the
+    // flag is unknown is excluded rather than assumed, so a parent filtering
+    // for kid-friendly never gets an unverified listing.
+    if (filters?.free) conditions.push(eq(events.isFree, true));
+    if (filters?.kids) conditions.push(eq(events.isKidFriendly, true));
+    if (filters?.indoor) conditions.push(eq(events.isIndoor, true));
+    if (filters?.skywalk) conditions.push(eq(events.isSkywalkAccessible, true));
 
     if (filters?.category && filters.category !== ALL_CATEGORIES) {
       // Match the primary category or either secondary one. "Free" is almost
@@ -632,6 +654,70 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async backfillEventFlags(): Promise<number> {
+    const rows = await this.db
+      .select({
+        id: events.id,
+        title: events.title,
+        originalDescription: events.originalDescription,
+        enhancedDescription: events.enhancedDescription,
+        price: events.price,
+        venue: events.venue,
+        location: events.location,
+        isFree: events.isFree,
+        isKidFriendly: events.isKidFriendly,
+        ageRange: events.ageRange,
+        isIndoor: events.isIndoor,
+        isSkywalkAccessible: events.isSkywalkAccessible,
+      })
+      .from(events);
+
+    let updated = 0;
+    for (const row of rows) {
+      const venueFacts = findVenueFacts(row.venue, row.location, row.title);
+      const textFlags = extractEventFlags({
+        title: row.title,
+        description: row.enhancedDescription || row.originalDescription,
+        price: row.price,
+        venue: row.venue,
+        location: row.location,
+      });
+
+      // Existing values are treated as the most trusted source, so a rerun
+      // never overwrites anything already established.
+      const merged = mergeFlags(
+        {
+          isFree: row.isFree,
+          isKidFriendly: row.isKidFriendly,
+          ageRange: row.ageRange,
+          isIndoor: row.isIndoor,
+        },
+        venueFacts ? { isIndoor: venueFacts.isIndoor } : null,
+        textFlags,
+      );
+
+      const skywalk =
+        row.isSkywalkAccessible ?? venueFacts?.isSkywalkAccessible ?? null;
+
+      const changed =
+        merged.isFree !== row.isFree ||
+        merged.isKidFriendly !== row.isKidFriendly ||
+        merged.ageRange !== row.ageRange ||
+        merged.isIndoor !== row.isIndoor ||
+        skywalk !== row.isSkywalkAccessible;
+
+      if (!changed) continue;
+
+      await this.db
+        .update(events)
+        .set({ ...merged, isSkywalkAccessible: skywalk })
+        .where(eq(events.id, row.id));
+      updated += 1;
+    }
+
+    return updated;
+  }
+
   async backfillNeighborhoods(): Promise<number> {
     let filled = 0;
 
@@ -757,10 +843,20 @@ export class MemStorage implements IStorage {
     date?: string;
     location?: string;
     neighborhood?: string;
+    free?: boolean;
+    kids?: boolean;
+    indoor?: boolean;
+    skywalk?: boolean;
   }): Promise<Event[]> {
     let results = Array.from(this.events.values());
 
     if (filters) {
+      if (filters.free) results = results.filter((e) => e.isFree === true);
+      if (filters.kids) results = results.filter((e) => e.isKidFriendly === true);
+      if (filters.indoor) results = results.filter((e) => e.isIndoor === true);
+      if (filters.skywalk) {
+        results = results.filter((e) => e.isSkywalkAccessible === true);
+      }
       if (filters.category && filters.category !== ALL_CATEGORIES) {
         const wanted = filters.category;
         results = results.filter(
@@ -833,6 +929,12 @@ export class MemStorage implements IStorage {
       price: insertEvent.price ?? null,
       isEnhanced: insertEvent.isEnhanced ?? false,
       secondaryCategories: insertEvent.secondaryCategories ?? null,
+      isFree: insertEvent.isFree ?? null,
+      isKidFriendly: insertEvent.isKidFriendly ?? null,
+      ageRange: insertEvent.ageRange ?? null,
+      isIndoor: insertEvent.isIndoor ?? null,
+      isSkywalkAccessible: insertEvent.isSkywalkAccessible ?? null,
+      weatherBackup: insertEvent.weatherBackup ?? null,
       id,
       createdAt: new Date(),
     };
@@ -939,6 +1041,8 @@ export class MemStorage implements IStorage {
       location: insertAttraction.location ?? null,
       imageUrl: insertAttraction.imageUrl ?? null,
       searchCount: insertAttraction.searchCount ?? 0,
+      isIndoor: insertAttraction.isIndoor ?? null,
+      isSkywalkAccessible: insertAttraction.isSkywalkAccessible ?? null,
       id,
     };
     this.attractions.set(id, attraction);
@@ -982,6 +1086,12 @@ export class MemStorage implements IStorage {
       imageUrl: insertPlayground.imageUrl ?? null,
       ageRange: insertPlayground.ageRange ?? null,
       searchCount: insertPlayground.searchCount ?? 0,
+      isIndoor: insertPlayground.isIndoor ?? null,
+      isSkywalkAccessible: insertPlayground.isSkywalkAccessible ?? null,
+      hasSplashPad: insertPlayground.hasSplashPad ?? null,
+      hasShade: insertPlayground.hasShade ?? null,
+      hasRestrooms: insertPlayground.hasRestrooms ?? null,
+      isFenced: insertPlayground.isFenced ?? null,
       id,
     };
     this.playgrounds.set(id, playground);
@@ -1143,6 +1253,45 @@ export class MemStorage implements IStorage {
     return updated;
   }
 
+  async backfillEventFlags(): Promise<number> {
+    let updated = 0;
+
+    for (const [id, event] of Array.from(this.events.entries())) {
+      const venueFacts = findVenueFacts(event.venue, event.location, event.title);
+      const merged = mergeFlags(
+        {
+          isFree: event.isFree,
+          isKidFriendly: event.isKidFriendly,
+          ageRange: event.ageRange,
+          isIndoor: event.isIndoor,
+        },
+        venueFacts ? { isIndoor: venueFacts.isIndoor } : null,
+        extractEventFlags({
+          title: event.title,
+          description: event.enhancedDescription || event.originalDescription,
+          price: event.price,
+          venue: event.venue,
+          location: event.location,
+        }),
+      );
+      const skywalk =
+        event.isSkywalkAccessible ?? venueFacts?.isSkywalkAccessible ?? null;
+
+      const changed =
+        merged.isFree !== event.isFree ||
+        merged.isKidFriendly !== event.isKidFriendly ||
+        merged.ageRange !== event.ageRange ||
+        merged.isIndoor !== event.isIndoor ||
+        skywalk !== event.isSkywalkAccessible;
+
+      if (!changed) continue;
+      this.events.set(id, { ...event, ...merged, isSkywalkAccessible: skywalk });
+      updated += 1;
+    }
+
+    return updated;
+  }
+
   async backfillNeighborhoods(): Promise<number> {
     let filled = 0;
 
@@ -1243,6 +1392,11 @@ export async function initializeStorage(): Promise<void> {
     const recategorized = await storage.backfillCategories();
     if (recategorized > 0) {
       console.log(`[storage] Migrated ${recategorized} event(s) to the current categories.`);
+    }
+
+    const flagged = await storage.backfillEventFlags();
+    if (flagged > 0) {
+      console.log(`[storage] Filled practical flags on ${flagged} event(s).`);
     }
 
     const classified = await storage.backfillNeighborhoods();

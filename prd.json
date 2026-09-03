@@ -236,7 +236,7 @@
         "EventFilters exposes toggles for Free, Kid-Friendly, Indoor Only.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-008",
