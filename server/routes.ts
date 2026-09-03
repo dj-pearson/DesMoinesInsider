@@ -56,7 +56,19 @@ async function runComprehensiveScrape(): Promise<{
   console.log("Starting comprehensive scraping from all sources...");
 
   const existingEvents = await storage.getEvents();
-  const { events: newEvents, restaurants: newRestaurants } = await scrapeAllSources();
+  const { events: newEvents, restaurants: newRestaurants, runs } = await scrapeAllSources();
+
+  // Recorded before anything else can fail. If enhancement or storage throws
+  // below, the run record is the only evidence of which sources were healthy.
+  await storage.recordScrapeRuns(
+    runs.map((run) => ({
+      source: run.source,
+      ok: run.ok,
+      eventCount: run.count,
+      durationMs: run.durationMs,
+      error: run.error,
+    })),
+  );
 
   console.log(`Scraped ${newEvents.length} events from all sources`);
   console.log(`Found ${newRestaurants.length} restaurant openings from news sources`);
@@ -277,6 +289,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to get event:", error);
       res.status(500).json({ message: "Failed to fetch event" });
+    }
+  });
+
+  // Admin only: which sources are healthy. A source that has been returning
+  // zero events for a week is the failure mode that otherwise goes unnoticed.
+  app.get("/api/admin/scrape-runs", requireAdmin, async (req, res) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 50, 200);
+      res.json(await storage.getRecentScrapeRuns(limit));
+    } catch (error) {
+      console.error("Failed to load scrape runs:", error);
+      res.status(500).json({ message: "Could not load scrape history" });
     }
   });
 

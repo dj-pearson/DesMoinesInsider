@@ -578,6 +578,36 @@ export type InsertPlayground = z.infer<typeof insertPlaygroundSchema>;
 
 export type User = typeof users.$inferSelect;
 
+/**
+ * One source's result on one scrape run.
+ *
+ * Scrapers fail quietly: a venue changes its markup and that source returns
+ * zero events while every other source keeps working, so the totals still look
+ * healthy. Recording every attempt — including the successful ones with a count
+ * of zero — is what makes "Wooly's has returned nothing for nine days" a
+ * question someone can actually ask.
+ */
+export const scrapeRuns = pgTable("scrape_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  source: text("source").notNull(),
+  ok: boolean("ok").notNull(),
+  eventCount: integer("event_count").notNull().default(0),
+  durationMs: integer("duration_ms").notNull().default(0),
+  /** Null on success. The message only, never a stack. */
+  error: text("error"),
+  startedAt: timestamp("started_at").defaultNow(),
+});
+
+export type ScrapeRun = typeof scrapeRuns.$inferSelect;
+
+export interface InsertScrapeRun {
+  source: string;
+  ok: boolean;
+  eventCount: number;
+  durationMs: number;
+  error?: string;
+}
+
 /** What the API returns for a user. Never includes the hash. */
 export type PublicUser = Pick<
   User,

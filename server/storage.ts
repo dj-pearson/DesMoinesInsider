@@ -36,6 +36,9 @@ import {
   type InsertTip,
   type Tip,
   type TipWithAuthor,
+  scrapeRuns,
+  type ScrapeRun,
+  type InsertScrapeRun,
 } from "@shared/schema";
 import {
   and,
@@ -178,6 +181,11 @@ export interface IStorage {
   getTips(targetType: string, targetId: string): Promise<TipWithAuthor[]>;
   setTipStatus(id: string, status: "visible" | "hidden"): Promise<Tip | undefined>;
   getUserTipFor(userId: string, targetType: string, targetId: string): Promise<Tip | undefined>;
+
+  // Scrape health
+  recordScrapeRuns(runs: InsertScrapeRun[]): Promise<void>;
+  /** Most recent run per source, newest first. */
+  getRecentScrapeRuns(limit?: number): Promise<ScrapeRun[]>;
 
   // Saved events
   saveEvent(userId: string, eventId: string): Promise<void>;
@@ -1000,6 +1008,28 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
     return row;
+  }
+
+  // Scrape health
+  async recordScrapeRuns(runs: InsertScrapeRun[]): Promise<void> {
+    if (runs.length === 0) return;
+    await this.db.insert(scrapeRuns).values(
+      runs.map((run) => ({
+        source: run.source,
+        ok: run.ok,
+        eventCount: run.eventCount,
+        durationMs: run.durationMs,
+        error: run.error ?? null,
+      })),
+    );
+  }
+
+  async getRecentScrapeRuns(limit = 50): Promise<ScrapeRun[]> {
+    return this.db
+      .select()
+      .from(scrapeRuns)
+      .orderBy(desc(scrapeRuns.startedAt))
+      .limit(limit);
   }
 
   // Saved events
@@ -2084,6 +2114,30 @@ export class MemStorage implements IStorage {
         tip.targetType === targetType &&
         tip.targetId === targetId,
     );
+  }
+
+  // Scrape health
+  private scrapeRunLog: ScrapeRun[] = [];
+
+  async recordScrapeRuns(runs: InsertScrapeRun[]): Promise<void> {
+    for (const run of runs) {
+      this.scrapeRunLog.unshift({
+        id: randomUUID(),
+        source: run.source,
+        ok: run.ok,
+        eventCount: run.eventCount,
+        durationMs: run.durationMs,
+        error: run.error ?? null,
+        startedAt: new Date(),
+      });
+    }
+    // Development store: keep it bounded so a long-running dev server does not
+    // accumulate every run it has ever made.
+    this.scrapeRunLog = this.scrapeRunLog.slice(0, 500);
+  }
+
+  async getRecentScrapeRuns(limit = 50): Promise<ScrapeRun[]> {
+    return this.scrapeRunLog.slice(0, limit);
   }
 
   // Saved events

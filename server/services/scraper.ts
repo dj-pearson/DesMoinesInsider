@@ -1,6 +1,8 @@
 import { classifyOpeningStatus } from '@shared/openingStatus.js';
 import type { OpeningStatus } from '@shared/schema.js';
 import puppeteer from "puppeteer";
+import { scrapeSources } from "./scrapers/index.js";
+import type { SourceRunResult } from "./scrapers/types.js";
 
 export interface ScrapedEvent {
   title: string;
@@ -660,66 +662,89 @@ export async function scrapeDesMoinesRegisterRestaurants(): Promise<ScrapedResta
 export async function scrapeAllSources(): Promise<{
   events: ScrapedEvent[];
   restaurants: ScrapedRestaurant[];
+  runs: SourceRunResult[];
 }> {
   console.log('Starting comprehensive scraping of all sources...');
-  
-  const allEvents: ScrapedEvent[] = [];
+
+  // Venue scrapers live in ./scrapers, one file per source, and the runner
+  // there handles concurrency and per-source failure. The sources below are the
+  // ones that are not tied to a single venue: search aggregators and the
+  // restaurant-opening trawl through local news.
+  const { events: venueEvents, runs } = await scrapeSources();
+
+  const allEvents: ScrapedEvent[] = [...venueEvents];
   const allRestaurants: ScrapedRestaurant[] = [];
-  
-  try {
-    // Scrape events from all sources
-    const eventSources = [
-      { name: 'Google Events', scraper: () => scrapeGoogleEvents() },
-      { name: 'Catch Des Moines', scraper: () => scrapeCatchDesMoinesWithDirectLinks() },
-      { name: 'Eventbrite', scraper: () => scrapeEventbrite() },
-      { name: 'Vibrant Music Hall', scraper: () => scrapeVibrantMusicHall() },
-      { name: 'Hoyt Sherman', scraper: () => scrapeHoytSherman() },
-      { name: 'Val Aire Ballroom', scraper: () => scrapeValAireBallroom() },
-      { name: 'Iowa Wild', scraper: () => scrapeIowaWild() },
-      { name: 'Iowa Wolves', scraper: () => scrapeIowaWolves() },
-      { name: 'Iowa Cubs', scraper: () => scrapeIowaCubs() },
-      { name: 'Iowa Barnstormers', scraper: () => scrapeIowaBarnstormers() },
-      { name: 'Iowa Events Center', scraper: () => scrapeIowaEventsCenter() },
-    ];
-    
-    for (const source of eventSources) {
-      try {
-        console.log(`Scraping ${source.name}...`);
-        const events = await source.scraper();
-        allEvents.push(...events);
-        console.log(`Found ${events.length} events from ${source.name}`);
-      } catch (error) {
-        console.error(`Failed to scrape ${source.name}:`, error);
-      }
-    }
-    
-    // Scrape restaurants
+
+  const aggregators = [
+    { name: 'Google Events', scraper: () => scrapeGoogleEvents() },
+    { name: 'Catch Des Moines', scraper: () => scrapeCatchDesMoinesWithDirectLinks() },
+    { name: 'Eventbrite', scraper: () => scrapeEventbrite() },
+    { name: 'Vibrant Music Hall', scraper: () => scrapeVibrantMusicHall() },
+    { name: 'Hoyt Sherman', scraper: () => scrapeHoytSherman() },
+    { name: 'Val Aire Ballroom', scraper: () => scrapeValAireBallroom() },
+    { name: 'Iowa Wild', scraper: () => scrapeIowaWild() },
+    { name: 'Iowa Wolves', scraper: () => scrapeIowaWolves() },
+    { name: 'Iowa Cubs', scraper: () => scrapeIowaCubs() },
+    { name: 'Iowa Barnstormers', scraper: () => scrapeIowaBarnstormers() },
+    { name: 'Iowa Events Center', scraper: () => scrapeIowaEventsCenter() },
+  ];
+
+  for (const source of aggregators) {
+    const startedAt = Date.now();
     try {
-      console.log('Scraping DSM Magazine restaurants...');
-      const dsmRestaurants = await scrapeDSMMagazineRestaurants();
-      allRestaurants.push(...dsmRestaurants);
-      console.log(`Found ${dsmRestaurants.length} restaurants from DSM Magazine`);
+      const events = await source.scraper();
+      allEvents.push(...events);
+      runs.push({
+        source: source.name,
+        ok: true,
+        count: events.length,
+        durationMs: Date.now() - startedAt,
+      });
     } catch (error) {
-      console.error('Failed to scrape DSM Magazine restaurants:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to scrape ${source.name}:`, message);
+      runs.push({
+        source: source.name,
+        ok: false,
+        count: 0,
+        durationMs: Date.now() - startedAt,
+        error: message.slice(0, 500),
+      });
     }
-    
-    try {
-      console.log('Scraping Des Moines Register restaurants...');
-      const registerRestaurants = await scrapeDesMoinesRegisterRestaurants();
-      allRestaurants.push(...registerRestaurants);
-      console.log(`Found ${registerRestaurants.length} restaurants from Des Moines Register`);
-    } catch (error) {
-      console.error('Failed to scrape Des Moines Register restaurants:', error);
-    }
-    
-  } catch (error) {
-    console.error('Error during comprehensive scraping:', error);
   }
-  
-  console.log(`Comprehensive scraping complete. Found ${allEvents.length} total events and ${allRestaurants.length} restaurants.`);
-  
-  return {
-    events: allEvents,
-    restaurants: allRestaurants
-  };
+
+  const restaurantSources = [
+    { name: 'DSM Magazine restaurants', scraper: () => scrapeDSMMagazineRestaurants() },
+    { name: 'Des Moines Register restaurants', scraper: () => scrapeDesMoinesRegisterRestaurants() },
+  ];
+
+  for (const source of restaurantSources) {
+    const startedAt = Date.now();
+    try {
+      const restaurants = await source.scraper();
+      allRestaurants.push(...restaurants);
+      runs.push({
+        source: source.name,
+        ok: true,
+        count: restaurants.length,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to scrape ${source.name}:`, message);
+      runs.push({
+        source: source.name,
+        ok: false,
+        count: 0,
+        durationMs: Date.now() - startedAt,
+        error: message.slice(0, 500),
+      });
+    }
+  }
+
+  console.log(
+    `Comprehensive scraping complete. Found ${allEvents.length} total events and ${allRestaurants.length} restaurants.`,
+  );
+
+  return { events: allEvents, restaurants: allRestaurants, runs };
 }

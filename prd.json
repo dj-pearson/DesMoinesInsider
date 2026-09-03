@@ -506,7 +506,7 @@
         "A scraper failing does not abort the run.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-020",
