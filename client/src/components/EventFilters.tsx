@@ -1,11 +1,19 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import EventCard from "./EventCard";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Event } from "@shared/schema";
+import { Event, Neighborhood } from "@shared/schema";
 import { Calendar } from "lucide-react";
 
 export default function EventFilters() {
@@ -13,10 +21,25 @@ export default function EventFilters() {
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
   const [locationFilter, setLocationFilter] = useState("All Locations");
 
+  // The location list is data, not a hardcoded dropdown: it comes from the
+  // neighborhoods table so districts and suburbs stay in one place.
+  const { data: neighborhoods } = useQuery<Neighborhood[]>({
+    queryKey: ['/api/neighborhoods'],
+  });
+
+  const groupedNeighborhoods = [
+    { label: "Des Moines districts", kind: "district" },
+    { label: "Des Moines neighborhoods", kind: "neighborhood" },
+    { label: "Suburbs", kind: "suburb" },
+  ].map((group) => ({
+    ...group,
+    items: (neighborhoods ?? []).filter((n) => n.kind === group.kind),
+  })).filter((group) => group.items.length > 0);
+
   const buildQueryParams = () => {
     const params = new URLSearchParams();
     if (categoryFilter !== "All Categories") params.append('category', categoryFilter);
-    if (locationFilter !== "All Locations") params.append('location', locationFilter);
+    if (locationFilter !== "All Locations") params.append('neighborhood', locationFilter);
     if (dateFilter !== "All Dates") {
       const today = new Date();
       if (dateFilter === "Today") {
@@ -119,10 +142,16 @@ export default function EventFilters() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="All Locations">All Locations</SelectItem>
-                  <SelectItem value="Downtown">Downtown</SelectItem>
-                  <SelectItem value="East Village">East Village</SelectItem>
-                  <SelectItem value="Ingersoll">Ingersoll</SelectItem>
-                  <SelectItem value="West Des Moines">West Des Moines</SelectItem>
+                  {groupedNeighborhoods.map((group) => (
+                    <SelectGroup key={group.kind}>
+                      <SelectLabel>{group.label}</SelectLabel>
+                      {group.items.map((neighborhood) => (
+                        <SelectItem key={neighborhood.id} value={neighborhood.slug}>
+                          {neighborhood.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

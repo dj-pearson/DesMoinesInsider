@@ -1,7 +1,38 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, jsonb, integer, boolean } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  doublePrecision,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  varchar,
+} from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+
+/**
+ * The metro as locals actually describe it: named neighborhoods and districts
+ * inside Des Moines, plus the surrounding suburbs people live in. Everything
+ * else in the schema hangs off this so content can be browsed by place.
+ */
+export const neighborhoods = pgTable("neighborhoods", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  // 'district' is a compact commercial area (Court Avenue, East Village),
+  // 'neighborhood' a residential area of Des Moines proper, 'suburb' a
+  // separate incorporated city in the metro.
+  kind: text("kind").notNull(),
+  description: text("description"),
+  centerLat: doublePrecision("center_lat"),
+  centerLng: doublePrecision("center_lng"),
+  heroImageUrl: text("hero_image_url"),
+});
+
+export const NEIGHBORHOOD_KINDS = ["district", "neighborhood", "suburb"] as const;
+export type NeighborhoodKind = (typeof NEIGHBORHOOD_KINDS)[number];
 
 export const events = pgTable("events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -10,6 +41,10 @@ export const events = pgTable("events", {
   // code always populates it on insert and backfills any gaps at boot.
   slug: text("slug").unique(),
   title: text("title").notNull(),
+  // Which part of the metro this belongs to. Null when the classifier could
+  // not place it confidently; a wrong neighborhood is worse than none.
+  neighborhoodId: varchar("neighborhood_id").references(() => neighborhoods.id),
+
   originalDescription: text("original_description"),
   enhancedDescription: text("enhanced_description"),
   date: timestamp("date").notNull(),
@@ -31,6 +66,10 @@ export const restaurants = pgTable("restaurants", {
   slug: text("slug").unique(),
   name: text("name").notNull(),
   cuisine: text("cuisine").notNull(),
+  // Which part of the metro this belongs to. Null when the classifier could
+  // not place it confidently; a wrong neighborhood is worse than none.
+  neighborhoodId: varchar("neighborhood_id").references(() => neighborhoods.id),
+
   rating: integer("rating").notNull(), // 1-5 scale
   imageUrl: text("image_url"),
   description: text("description"),
@@ -46,6 +85,10 @@ export const attractions = pgTable("attractions", {
   slug: text("slug").unique(),
   name: text("name").notNull(),
   type: text("type").notNull(),
+  // Which part of the metro this belongs to. Null when the classifier could
+  // not place it confidently; a wrong neighborhood is worse than none.
+  neighborhoodId: varchar("neighborhood_id").references(() => neighborhoods.id),
+
   description: text("description"),
   imageUrl: text("image_url"),
   location: text("location"),
@@ -59,6 +102,10 @@ export const playgrounds = pgTable("playgrounds", {
   slug: text("slug").unique(),
   name: text("name").notNull(),
   features: text("features").notNull(),
+  // Which part of the metro this belongs to. Null when the classifier could
+  // not place it confidently; a wrong neighborhood is worse than none.
+  neighborhoodId: varchar("neighborhood_id").references(() => neighborhoods.id),
+
   description: text("description"),
   imageUrl: text("image_url"),
   location: text("location"),
@@ -81,6 +128,10 @@ export const newsletterSubscriptions = pgTable("newsletter_subscriptions", {
 export const restaurantOpenings = pgTable("restaurant_openings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  // Which part of the metro this belongs to. Null when the classifier could
+  // not place it confidently; a wrong neighborhood is worse than none.
+  neighborhoodId: varchar("neighborhood_id").references(() => neighborhoods.id),
+
   description: text("description"),
   location: text("location"),
   cuisine: text("cuisine"),
@@ -124,9 +175,17 @@ export const insertNewsletterSchema = createInsertSchema(newsletterSubscriptions
 export const insertRestaurantOpeningSchema = createInsertSchema(restaurantOpenings).omit({
   id: true,
   createdAt: true,
+  neighborhoodId: true,
+});
+
+export const insertNeighborhoodSchema = createInsertSchema(neighborhoods).omit({
+  id: true,
 });
 
 // Types
+export type Neighborhood = typeof neighborhoods.$inferSelect;
+export type InsertNeighborhood = z.infer<typeof insertNeighborhoodSchema>;
+
 export type Event = typeof events.$inferSelect;
 export type InsertEvent = z.infer<typeof insertEventSchema>;
 

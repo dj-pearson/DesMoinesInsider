@@ -1,6 +1,7 @@
 import {
   attractions,
   events,
+  neighborhoods,
   newsletterSubscriptions,
   playgrounds,
   restaurantOpenings,
@@ -10,11 +11,13 @@ import {
   type Event,
   type InsertAttraction,
   type InsertEvent,
+  type InsertNeighborhood,
   type InsertNewsletterSubscription,
   type InsertPlayground,
   type InsertRestaurant,
   type InsertRestaurantOpening,
   type InsertUser,
+  type Neighborhood,
   type NewsletterSubscription,
   type Playground,
   type Restaurant,
@@ -26,15 +29,39 @@ import { buildEventSlug, buildPlaceSlug, ensureUniqueSlug } from "@shared/slug";
 import { randomUUID } from "crypto";
 import { getDb, isDatabaseConfigured } from "./db";
 import {
+  classifyNeighborhoodSlug,
+  type ClassifyInput,
+} from "./services/neighborhoodClassifier";
+import { seedNeighborhoods } from "./seed/neighborhoods";
+import {
   buildSeedEvents,
   seedAttractions,
   seedPlaygrounds,
   seedRestaurants,
 } from "./seed/data";
 
+/** A neighborhood plus how much content currently sits in it. */
+export interface NeighborhoodWithCounts extends Neighborhood {
+  upcomingEventCount: number;
+  restaurantOpeningCount: number;
+  playgroundCount: number;
+  restaurantCount: number;
+  attractionCount: number;
+}
+
 export interface IStorage {
+  // Neighborhoods
+  getNeighborhoods(): Promise<Neighborhood[]>;
+  getNeighborhoodBySlug(slug: string): Promise<NeighborhoodWithCounts | undefined>;
+
   // Events
-  getEvents(filters?: { category?: string; date?: string; location?: string }): Promise<Event[]>;
+  getEvents(filters?: {
+    category?: string;
+    date?: string;
+    location?: string;
+    /** Neighborhood slug. Filters on the foreign key, not on location text. */
+    neighborhood?: string;
+  }): Promise<Event[]>;
   getEvent(id: string): Promise<Event | undefined>;
   getEventBySlug(slug: string): Promise<Event | undefined>;
   createEvent(event: InsertEvent): Promise<Event>;
@@ -84,6 +111,9 @@ export interface IStorage {
 
   /** Give any restaurant, attraction or playground missing a slug one. */
   backfillPlaceSlugs(): Promise<number>;
+
+  /** Assign neighborhoods to rows that do not have one yet. */
+  backfillNeighborhoods(): Promise<number>;
 }
 
 /** Filter sentinels the client sends when a dropdown is left on its default. */
@@ -99,18 +129,104 @@ export class DatabaseStorage implements IStorage {
     return getDb();
   }
 
+  /**
+   * Cached slug -> id map for neighborhoods. The table is tiny and changes
+   * only when we deploy new seed data, so re-reading it on every insert would
+   * be pure overhead.
+   */
+  private neighborhoodIdCache: Map<string, string> | undefined;
+
+  private async neighborhoodIds(): Promise<Map<string, string>> {
+    if (!this.neighborhoodIdCache) {
+      const rows = await this.db
+        .select({ id: neighborhoods.id, slug: neighborhoods.slug })
+        .from(neighborhoods);
+      this.neighborhoodIdCache = new Map(rows.map((row) => [row.slug, row.id]));
+    }
+    return this.neighborhoodIdCache;
+  }
+
+  /** Resolve content details to a neighborhood id, or null when unsure. */
+  private async classify(input: ClassifyInput): Promise<string | null> {
+    const slug = classifyNeighborhoodSlug(input);
+    if (!slug) return null;
+    return (await this.neighborhoodIds()).get(slug) ?? null;
+  }
+
+  // Neighborhoods
+  async getNeighborhoods(): Promise<Neighborhood[]> {
+    return this.db.select().from(neighborhoods).orderBy(asc(neighborhoods.name));
+  }
+
+  async getNeighborhoodBySlug(
+    slug: string,
+  ): Promise<NeighborhoodWithCounts | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(neighborhoods)
+      .where(eq(neighborhoods.slug, slug))
+      .limit(1);
+
+    if (!row) return undefined;
+
+    const countIn = async (
+      table: typeof restaurants | typeof attractions | typeof playgrounds,
+    ): Promise<number> => {
+      const [result] = await this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(table)
+        .where(eq(table.neighborhoodId, row.id));
+      return result?.count ?? 0;
+    };
+
+    const [upcoming, openings, playgroundCount, restaurantCount, attractionCount] =
+      await Promise.all([
+        this.db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(events)
+          .where(and(eq(events.neighborhoodId, row.id), gte(events.date, new Date())))
+          .then((rows) => rows[0]?.count ?? 0),
+        this.db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(restaurantOpenings)
+          .where(eq(restaurantOpenings.neighborhoodId, row.id))
+          .then((rows) => rows[0]?.count ?? 0),
+        countIn(playgrounds),
+        countIn(restaurants),
+        countIn(attractions),
+      ]);
+
+    return {
+      ...row,
+      upcomingEventCount: upcoming,
+      restaurantOpeningCount: openings,
+      playgroundCount,
+      restaurantCount,
+      attractionCount,
+    };
+  }
+
   // Events
   async getEvents(filters?: {
     category?: string;
     date?: string;
     location?: string;
+    neighborhood?: string;
   }): Promise<Event[]> {
     const conditions = [];
 
     if (filters?.category && filters.category !== ALL_CATEGORIES) {
       conditions.push(ilike(events.category, `%${filters.category}%`));
     }
-    if (filters?.location && filters.location !== ALL_LOCATIONS) {
+    // Prefer the neighborhood foreign key when we have it. Matching on the raw
+    // location string misses everything whose text does not happen to name the
+    // neighborhood, which is most of it.
+    if (filters?.neighborhood) {
+      const id = (await this.neighborhoodIds()).get(filters.neighborhood);
+      // An unknown slug must return nothing rather than silently ignoring the
+      // filter and showing the whole metro.
+      conditions.push(id ? eq(events.neighborhoodId, id) : sql`false`);
+    } else if (filters?.location && filters.location !== ALL_LOCATIONS) {
       conditions.push(ilike(events.location, `%${filters.location}%`));
     }
     if (filters?.date) {
@@ -205,13 +321,23 @@ export class DatabaseStorage implements IStorage {
     // is about to claim, so a batch containing two same-day duplicates of a
     // title still produces two distinct URLs.
     const taken = await this.takenSlugs();
-    const withSlugs = newEvents.map((event) => {
-      const slug = ensureUniqueSlug(buildEventSlug(event.title, event.date), taken);
-      taken.add(slug);
-      return { ...event, slug };
-    });
+    const prepared = await Promise.all(
+      newEvents.map(async (event) => {
+        const slug = ensureUniqueSlug(buildEventSlug(event.title, event.date), taken);
+        taken.add(slug);
+        return {
+          ...event,
+          slug,
+          neighborhoodId: await this.classify({
+            venue: event.venue,
+            location: event.location,
+            title: event.title,
+          }),
+        };
+      }),
+    );
 
-    return this.db.insert(events).values(withSlugs).returning();
+    return this.db.insert(events).values(prepared).returning();
   }
 
   async backfillEventSlugs(): Promise<number> {
@@ -265,9 +391,13 @@ export class DatabaseStorage implements IStorage {
 
   async createRestaurant(restaurant: InsertRestaurant): Promise<Restaurant> {
     const slug = await this.freePlaceSlug(restaurants, restaurant.name);
+    const neighborhoodId = await this.classify({
+      venue: restaurant.name,
+      location: restaurant.location,
+    });
     const [created] = await this.db
       .insert(restaurants)
-      .values({ ...restaurant, slug })
+      .values({ ...restaurant, slug, neighborhoodId })
       .returning();
     return created;
   }
@@ -303,9 +433,13 @@ export class DatabaseStorage implements IStorage {
 
   async createAttraction(attraction: InsertAttraction): Promise<Attraction> {
     const slug = await this.freePlaceSlug(attractions, attraction.name);
+    const neighborhoodId = await this.classify({
+      venue: attraction.name,
+      location: attraction.location,
+    });
     const [created] = await this.db
       .insert(attractions)
-      .values({ ...attraction, slug })
+      .values({ ...attraction, slug, neighborhoodId })
       .returning();
     return created;
   }
@@ -341,9 +475,13 @@ export class DatabaseStorage implements IStorage {
 
   async createPlayground(playground: InsertPlayground): Promise<Playground> {
     const slug = await this.freePlaceSlug(playgrounds, playground.name);
+    const neighborhoodId = await this.classify({
+      venue: playground.name,
+      location: playground.location,
+    });
     const [created] = await this.db
       .insert(playgrounds)
-      .values({ ...playground, slug })
+      .values({ ...playground, slug, neighborhoodId })
       .returning();
     return created;
   }
@@ -404,10 +542,7 @@ export class DatabaseStorage implements IStorage {
   async createRestaurantOpening(
     opening: InsertRestaurantOpening,
   ): Promise<RestaurantOpening> {
-    const [created] = await this.db
-      .insert(restaurantOpenings)
-      .values(opening)
-      .returning();
+    const [created] = await this.createRestaurantOpenings([opening]);
     return created;
   }
 
@@ -415,10 +550,40 @@ export class DatabaseStorage implements IStorage {
     openings: InsertRestaurantOpening[],
   ): Promise<RestaurantOpening[]> {
     if (openings.length === 0) return [];
-    return this.db.insert(restaurantOpenings).values(openings).returning();
+
+    const prepared = await Promise.all(
+      openings.map(async (opening) => ({
+        ...opening,
+        neighborhoodId: await this.classify({
+          venue: opening.name,
+          location: opening.location,
+        }),
+      })),
+    );
+
+    return this.db.insert(restaurantOpenings).values(prepared).returning();
+  }
+
+  /**
+   * Neighborhoods are reference data rather than content, so they are seeded
+   * independently of whether any events exist yet. Content classification
+   * depends on them being present.
+   */
+  private async seedNeighborhoodsIfEmpty(): Promise<void> {
+    const [{ count } = { count: 0 }] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(neighborhoods);
+
+    if (count > 0) return;
+
+    console.log(`Seeding ${seedNeighborhoods.length} neighborhoods...`);
+    await this.db.insert(neighborhoods).values(seedNeighborhoods);
+    this.neighborhoodIdCache = undefined;
   }
 
   async seedIfEmpty(): Promise<void> {
+    await this.seedNeighborhoodsIfEmpty();
+
     const [{ count } = { count: 0 }] = await this.db
       .select({ count: sql<number>`count(*)::int` })
       .from(events);
@@ -428,13 +593,79 @@ export class DatabaseStorage implements IStorage {
     }
 
     console.log("Database is empty, seeding baseline content...");
-    await Promise.all([
-      this.createEvents(buildSeedEvents()),
-      this.db.insert(restaurants).values(seedRestaurants),
-      this.db.insert(attractions).values(seedAttractions),
-      this.db.insert(playgrounds).values(seedPlaygrounds),
-    ]);
+    // Sequential rather than parallel: each create path classifies against the
+    // neighborhood cache, and the places share the slug-uniqueness check.
+    await this.createEvents(buildSeedEvents());
+    for (const restaurant of seedRestaurants) await this.createRestaurant(restaurant);
+    for (const attraction of seedAttractions) await this.createAttraction(attraction);
+    for (const playground of seedPlaygrounds) await this.createPlayground(playground);
     console.log("Seeding complete.");
+  }
+
+  async backfillNeighborhoods(): Promise<number> {
+    let filled = 0;
+
+    const eventRows = await this.db
+      .select({
+        id: events.id,
+        title: events.title,
+        venue: events.venue,
+        location: events.location,
+      })
+      .from(events)
+      .where(isNull(events.neighborhoodId));
+
+    for (const row of eventRows) {
+      const neighborhoodId = await this.classify({
+        venue: row.venue,
+        location: row.location,
+        title: row.title,
+      });
+      if (!neighborhoodId) continue;
+      await this.db.update(events).set({ neighborhoodId }).where(eq(events.id, row.id));
+      filled += 1;
+    }
+
+    for (const table of [restaurants, attractions, playgrounds] as const) {
+      const rows = await this.db
+        .select({ id: table.id, name: table.name, location: table.location })
+        .from(table)
+        .where(isNull(table.neighborhoodId));
+
+      for (const row of rows) {
+        const neighborhoodId = await this.classify({
+          venue: row.name,
+          location: row.location,
+        });
+        if (!neighborhoodId) continue;
+        await this.db.update(table).set({ neighborhoodId }).where(eq(table.id, row.id));
+        filled += 1;
+      }
+    }
+
+    const openingRows = await this.db
+      .select({
+        id: restaurantOpenings.id,
+        name: restaurantOpenings.name,
+        location: restaurantOpenings.location,
+      })
+      .from(restaurantOpenings)
+      .where(isNull(restaurantOpenings.neighborhoodId));
+
+    for (const row of openingRows) {
+      const neighborhoodId = await this.classify({
+        venue: row.name,
+        location: row.location,
+      });
+      if (!neighborhoodId) continue;
+      await this.db
+        .update(restaurantOpenings)
+        .set({ neighborhoodId })
+        .where(eq(restaurantOpenings.id, row.id));
+      filled += 1;
+    }
+
+    return filled;
   }
 }
 
@@ -443,6 +674,7 @@ export class DatabaseStorage implements IStorage {
 /* -------------------------------------------------------------------------- */
 
 export class MemStorage implements IStorage {
+  private neighborhoods: Map<string, Neighborhood> = new Map();
   private events: Map<string, Event> = new Map();
   private restaurants: Map<string, Restaurant> = new Map();
   private attractions: Map<string, Attraction> = new Map();
@@ -451,11 +683,50 @@ export class MemStorage implements IStorage {
   private newsletterSubscriptions: Map<string, NewsletterSubscription> = new Map();
   private restaurantOpenings: Map<string, RestaurantOpening> = new Map();
 
+  // Neighborhoods
+  async getNeighborhoods(): Promise<Neighborhood[]> {
+    return Array.from(this.neighborhoods.values()).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+  }
+
+  async getNeighborhoodBySlug(
+    slug: string,
+  ): Promise<NeighborhoodWithCounts | undefined> {
+    const row = Array.from(this.neighborhoods.values()).find((n) => n.slug === slug);
+    if (!row) return undefined;
+
+    const now = new Date();
+    const countIn = (items: Iterable<{ neighborhoodId: string | null }>) =>
+      Array.from(items).filter((item) => item.neighborhoodId === row.id).length;
+
+    return {
+      ...row,
+      upcomingEventCount: Array.from(this.events.values()).filter(
+        (e) => e.neighborhoodId === row.id && new Date(e.date) >= now,
+      ).length,
+      restaurantOpeningCount: countIn(this.restaurantOpenings.values()),
+      playgroundCount: countIn(this.playgrounds.values()),
+      restaurantCount: countIn(this.restaurants.values()),
+      attractionCount: countIn(this.attractions.values()),
+    };
+  }
+
+  /** Resolve content details to a neighborhood id, or null when unsure. */
+  private classify(input: ClassifyInput): string | null {
+    const slug = classifyNeighborhoodSlug(input);
+    if (!slug) return null;
+    return (
+      Array.from(this.neighborhoods.values()).find((n) => n.slug === slug)?.id ?? null
+    );
+  }
+
   // Events
   async getEvents(filters?: {
     category?: string;
     date?: string;
     location?: string;
+    neighborhood?: string;
   }): Promise<Event[]> {
     let results = Array.from(this.events.values());
 
@@ -465,7 +736,14 @@ export class MemStorage implements IStorage {
           event.category.toLowerCase().includes(filters.category!.toLowerCase()),
         );
       }
-      if (filters.location && filters.location !== ALL_LOCATIONS) {
+      if (filters.neighborhood) {
+        const match = Array.from(this.neighborhoods.values()).find(
+          (n) => n.slug === filters.neighborhood,
+        );
+        results = match
+          ? results.filter((event) => event.neighborhoodId === match.id)
+          : [];
+      } else if (filters.location && filters.location !== ALL_LOCATIONS) {
         results = results.filter((event) =>
           event.location.toLowerCase().includes(filters.location!.toLowerCase()),
         );
@@ -508,6 +786,11 @@ export class MemStorage implements IStorage {
     const event: Event = {
       ...insertEvent,
       slug,
+      neighborhoodId: this.classify({
+        venue: insertEvent.venue,
+        location: insertEvent.location,
+        title: insertEvent.title,
+      }),
       originalDescription: insertEvent.originalDescription ?? null,
       enhancedDescription: insertEvent.enhancedDescription ?? null,
       sourceUrl: insertEvent.sourceUrl ?? null,
@@ -570,6 +853,10 @@ export class MemStorage implements IStorage {
     const restaurant: Restaurant = {
       ...insertRestaurant,
       slug: this.freePlaceSlug(this.restaurants.values(), insertRestaurant.name),
+      neighborhoodId: this.classify({
+        venue: insertRestaurant.name,
+        location: insertRestaurant.location,
+      }),
       description: insertRestaurant.description ?? null,
       location: insertRestaurant.location ?? null,
       imageUrl: insertRestaurant.imageUrl ?? null,
@@ -609,6 +896,10 @@ export class MemStorage implements IStorage {
     const attraction: Attraction = {
       ...insertAttraction,
       slug: this.freePlaceSlug(this.attractions.values(), insertAttraction.name),
+      neighborhoodId: this.classify({
+        venue: insertAttraction.name,
+        location: insertAttraction.location,
+      }),
       description: insertAttraction.description ?? null,
       location: insertAttraction.location ?? null,
       imageUrl: insertAttraction.imageUrl ?? null,
@@ -647,6 +938,10 @@ export class MemStorage implements IStorage {
     const playground: Playground = {
       ...insertPlayground,
       slug: this.freePlaceSlug(this.playgrounds.values(), insertPlayground.name),
+      neighborhoodId: this.classify({
+        venue: insertPlayground.name,
+        location: insertPlayground.location,
+      }),
       description: insertPlayground.description ?? null,
       location: insertPlayground.location ?? null,
       imageUrl: insertPlayground.imageUrl ?? null,
@@ -722,6 +1017,10 @@ export class MemStorage implements IStorage {
     const id = randomUUID();
     const opening: RestaurantOpening = {
       ...insertOpening,
+      neighborhoodId: this.classify({
+        venue: insertOpening.name,
+        location: insertOpening.location,
+      }),
       description: insertOpening.description ?? null,
       location: insertOpening.location ?? null,
       cuisine: insertOpening.cuisine ?? null,
@@ -745,6 +1044,20 @@ export class MemStorage implements IStorage {
   }
 
   async seedIfEmpty(): Promise<void> {
+    if (this.neighborhoods.size === 0) {
+      for (const neighborhood of seedNeighborhoods) {
+        const id = randomUUID();
+        this.neighborhoods.set(id, {
+          ...neighborhood,
+          id,
+          description: neighborhood.description ?? null,
+          centerLat: neighborhood.centerLat ?? null,
+          centerLng: neighborhood.centerLng ?? null,
+          heroImageUrl: neighborhood.heroImageUrl ?? null,
+        });
+      }
+    }
+
     if (this.events.size > 0) return;
 
     for (const restaurant of seedRestaurants) await this.createRestaurant(restaurant);
@@ -778,6 +1091,43 @@ export class MemStorage implements IStorage {
       this.backfillPlaceMap(this.attractions) +
       this.backfillPlaceMap(this.playgrounds)
     );
+  }
+
+  async backfillNeighborhoods(): Promise<number> {
+    let filled = 0;
+
+    for (const [id, event] of Array.from(this.events.entries())) {
+      if (event.neighborhoodId) continue;
+      const neighborhoodId = this.classify({
+        venue: event.venue,
+        location: event.location,
+        title: event.title,
+      });
+      if (!neighborhoodId) continue;
+      this.events.set(id, { ...event, neighborhoodId });
+      filled += 1;
+    }
+
+    const fillPlaces = <T extends { neighborhoodId: string | null; name: string; location: string | null }>(
+      map: Map<string, T>,
+    ): number => {
+      let count = 0;
+      for (const [id, row] of Array.from(map.entries())) {
+        if (row.neighborhoodId) continue;
+        const neighborhoodId = this.classify({ venue: row.name, location: row.location });
+        if (!neighborhoodId) continue;
+        map.set(id, { ...row, neighborhoodId });
+        count += 1;
+      }
+      return count;
+    };
+
+    filled += fillPlaces(this.restaurants);
+    filled += fillPlaces(this.attractions);
+    filled += fillPlaces(this.playgrounds);
+    filled += fillPlaces(this.restaurantOpenings);
+
+    return filled;
   }
 
   async backfillEventSlugs(): Promise<number> {
@@ -838,6 +1188,11 @@ export async function initializeStorage(): Promise<void> {
     const filledPlaces = await storage.backfillPlaceSlugs();
     if (filledPlaces > 0) {
       console.log(`[storage] Backfilled slugs for ${filledPlaces} place(s).`);
+    }
+
+    const classified = await storage.backfillNeighborhoods();
+    if (classified > 0) {
+      console.log(`[storage] Assigned neighborhoods to ${classified} row(s).`);
     }
   } catch (error) {
     console.error("Failed to initialize storage:", error);

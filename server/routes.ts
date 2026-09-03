@@ -84,14 +84,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return apiWriteLimiter(req, res, next);
   });
 
+  // Neighborhoods endpoints
+  app.get("/api/neighborhoods", async (_req, res) => {
+    try {
+      res.json(await storage.getNeighborhoods());
+    } catch (error) {
+      console.error("Failed to get neighborhoods:", error);
+      res.status(500).json({ message: "Failed to fetch neighborhoods" });
+    }
+  });
+
+  app.get("/api/neighborhoods/:slug", async (req, res) => {
+    try {
+      const neighborhood = await storage.getNeighborhoodBySlug(req.params.slug);
+      if (!neighborhood) {
+        return res.status(404).json({ message: "Neighborhood not found" });
+      }
+      res.json(neighborhood);
+    } catch (error) {
+      console.error("Failed to get neighborhood:", error);
+      res.status(500).json({ message: "Failed to fetch neighborhood" });
+    }
+  });
+
   // Events endpoints
   app.get("/api/events", async (req, res) => {
     try {
-      const { category, date, location } = req.query;
+      const { category, date, location, neighborhood } = req.query;
       const filters = {
         category: category as string,
         date: date as string,
         location: location as string,
+        neighborhood: neighborhood as string,
       };
       
       const events = await storage.getEvents(filters);

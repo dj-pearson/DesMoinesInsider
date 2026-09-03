@@ -189,7 +189,7 @@
         "The location filter dropdown in `EventFilters.tsx` is driven by GET /api/neighborhoods, grouped by kind.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-006",
