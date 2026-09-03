@@ -51,6 +51,16 @@ export async function enhanceEvents(
         venue: event.venue,
         price: event.price,
         rawCategory: event.category,
+        // Curated facts, so the tip is grounded rather than invented.
+        venueContext: venueFacts
+          ? {
+              name: venueFacts.name,
+              neighborhood: venueFacts.neighborhoodSlug,
+              parkingNotes: venueFacts.parkingNotes,
+              nearbyEats: venueFacts.nearbyEats,
+              kidNotes: venueFacts.kidNotes,
+            }
+          : null,
       });
 
       const flags = mergeFlags(
@@ -63,6 +73,7 @@ export async function enhanceEvents(
         ...base,
         ...flags,
         enhancedDescription: result.description,
+        insiderTip: result.insiderTip,
         category: result.category,
         secondaryCategories: result.secondaryCategories,
         // Only claim AI enhancement when the copy actually changed.

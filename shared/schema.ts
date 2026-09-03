@@ -90,6 +90,34 @@ export const tentpoles = pgTable("tentpoles", {
   isKidFriendly: boolean("is_kid_friendly"),
 });
 
+/**
+ * Curated local knowledge about the places events happen.
+ *
+ * This exists so the AI never has to guess. A model can rewrite a description,
+ * but it cannot know that the ramp on Second Street empties faster than the one
+ * on Court, or that the Civic Center has no parking of its own. Those facts are
+ * the difference between a listing and a recommendation, and they are fed to
+ * the model as context rather than invented by it.
+ */
+export const venues = pgTable("venues", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  address: text("address"),
+  neighborhoodId: varchar("neighborhood_id").references(() => neighborhoods.id),
+  lat: doublePrecision("lat"),
+  lng: doublePrecision("lng"),
+  /** Where to actually park, and what to avoid. */
+  parkingNotes: text("parking_notes"),
+  /** Array of { name, note }: walkable places to eat before or after. */
+  nearbyEats: jsonb("nearby_eats"),
+  /** What a parent needs to know before bringing children. */
+  kidNotes: text("kid_notes"),
+  isIndoor: boolean("is_indoor"),
+  isSkywalkAccessible: boolean("is_skywalk_accessible"),
+  websiteUrl: text("website_url"),
+});
+
 export const events = pgTable("events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   // URL identity for the event's own page. Nullable at the database level so
@@ -109,6 +137,7 @@ export const events = pgTable("events", {
   // Up to two extra categories, so a free outdoor concert can be found under
   // Music, Free and Outdoor & Parks without needing duplicate rows.
   secondaryCategories: text("secondary_categories").array(),
+  venueId: varchar("venue_id").references(() => venues.id),
   source: text("source").notNull(), // 'google' or 'catch-des-moines'
   sourceUrl: text("source_url"),
   imageUrl: text("image_url"),
@@ -124,6 +153,8 @@ export const events = pgTable("events", {
   isIndoor: boolean("is_indoor"),
   isSkywalkAccessible: boolean("is_skywalk_accessible"),
   weatherBackup: text("weather_backup"),
+  /** One sentence of local advice, written from curated venue facts. */
+  insiderTip: text("insider_tip"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -273,6 +304,7 @@ export const insertEventSchema = createInsertSchema(events)
     createdAt: true,
     slug: true,
   })
+  .omit({ venueId: true })
   .extend({
     // Anything reaching the database must already be one of our categories.
     // Callers normalize scraped text with normalizeCategory() first.
@@ -335,6 +367,10 @@ export const insertTentpoleSchema = createInsertSchema(tentpoles).omit({
   id: true,
 });
 
+export const insertVenueSchema = createInsertSchema(venues).omit({
+  id: true,
+});
+
 // Types
 export type Neighborhood = typeof neighborhoods.$inferSelect;
 
@@ -343,6 +379,15 @@ export interface InsiderTip {
   title: string;
   body: string;
 }
+
+/** One walkable option near a venue. */
+export interface NearbyEat {
+  name: string;
+  note: string;
+}
+
+export type Venue = typeof venues.$inferSelect;
+export type InsertVenue = z.infer<typeof insertVenueSchema>;
 
 export type Tentpole = typeof tentpoles.$inferSelect;
 export type InsertTentpole = z.infer<typeof insertTentpoleSchema>;

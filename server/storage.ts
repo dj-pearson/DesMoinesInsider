@@ -3,6 +3,7 @@ import {
   events,
   neighborhoods,
   tentpoles,
+  venues,
   newsletterSubscriptions,
   playgrounds,
   restaurantOpenings,
@@ -20,6 +21,7 @@ import {
   type InsertUser,
   type Neighborhood,
   type Tentpole,
+  type Venue,
   type NewsletterSubscription,
   type Playground,
   type Restaurant,
@@ -52,6 +54,7 @@ import {
   type ClassifyInput,
 } from "./services/neighborhoodClassifier";
 import { seedNeighborhoods } from "./seed/neighborhoods";
+import { seedVenues } from "./seed/venues";
 import { resolveNextOccurrence, seedTentpoles } from "./seed/tentpoles";
 import {
   buildSeedEvents,
@@ -87,6 +90,9 @@ export interface TentpoleWithEvents {
 }
 
 export interface IStorage {
+  // Venues
+  getVenueById(id: string): Promise<Venue | undefined>;
+
   // Tentpoles
   getTentpoles(): Promise<Tentpole[]>;
   getUpcomingTentpoles(limit?: number): Promise<Tentpole[]>;
@@ -180,6 +186,9 @@ export interface IStorage {
   /** Fill in practical flags for rows that predate them. */
   backfillEventFlags(): Promise<number>;
 
+  /** Link events to curated venues where the text identifies one. */
+  backfillVenueLinks(): Promise<number>;
+
   /** Give any restaurant opening still missing a slug one. */
   backfillOpeningSlugs(): Promise<number>;
 
@@ -222,6 +231,60 @@ export class DatabaseStorage implements IStorage {
     const slug = classifyNeighborhoodSlug(input);
     if (!slug) return null;
     return (await this.neighborhoodIds()).get(slug) ?? null;
+  }
+
+  // Venues
+  async getVenueById(id: string): Promise<Venue | undefined> {
+    const [row] = await this.db.select().from(venues).where(eq(venues.id, id)).limit(1);
+    return row;
+  }
+
+  /** Slug -> id for venues, cached like the neighborhood map. */
+  private venueIdCache: Map<string, string> | undefined;
+
+  private async venueIds(): Promise<Map<string, string>> {
+    if (!this.venueIdCache) {
+      const rows = await this.db.select({ id: venues.id, slug: venues.slug }).from(venues);
+      this.venueIdCache = new Map(rows.map((row) => [row.slug, row.id]));
+    }
+    return this.venueIdCache;
+  }
+
+  /**
+   * Venues are reference data. Seeded once and then left alone, since an
+   * operator may have edited the curated notes since the last deploy.
+   */
+  private async seedVenuesIfMissing(): Promise<void> {
+    const existing = await this.db.select({ slug: venues.slug }).from(venues);
+    const known = new Set(existing.map((row) => row.slug));
+    const neighborhoodIds = await this.neighborhoodIds();
+
+    let added = 0;
+    for (const venue of seedVenues) {
+      if (known.has(venue.slug)) continue;
+      await this.db.insert(venues).values({
+        slug: venue.slug,
+        name: venue.name,
+        address: venue.address ?? null,
+        neighborhoodId: venue.neighborhoodSlug
+          ? (neighborhoodIds.get(venue.neighborhoodSlug) ?? null)
+          : null,
+        lat: venue.lat ?? null,
+        lng: venue.lng ?? null,
+        parkingNotes: venue.parkingNotes ?? null,
+        nearbyEats: venue.nearbyEats ?? null,
+        kidNotes: venue.kidNotes ?? null,
+        isIndoor: venue.isIndoor,
+        isSkywalkAccessible: venue.isSkywalkAccessible,
+        websiteUrl: venue.websiteUrl ?? null,
+      });
+      added += 1;
+    }
+
+    if (added > 0) {
+      console.log(`[storage] Seeded ${added} venue(s).`);
+      this.venueIdCache = undefined;
+    }
   }
 
   // Tentpoles
@@ -572,9 +635,11 @@ export class DatabaseStorage implements IStorage {
       newEvents.map(async (event) => {
         const slug = ensureUniqueSlug(buildEventSlug(event.title, event.date), taken);
         taken.add(slug);
+        const facts = findVenueFacts(event.venue, event.location, event.title);
         return {
           ...event,
           slug,
+          venueId: facts ? ((await this.venueIds()).get(facts.slug) ?? null) : null,
           neighborhoodId: await this.classify({
             venue: event.venue,
             location: event.location,
@@ -1012,6 +1077,7 @@ export class DatabaseStorage implements IStorage {
 
   async seedIfEmpty(): Promise<void> {
     await this.seedNeighborhoodsIfEmpty();
+    await this.seedVenuesIfMissing();
     await this.seedTentpolesAndRefreshDates();
 
     const [{ count } = { count: 0 }] = await this.db
@@ -1112,6 +1178,33 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  /** Link events to curated venues where the text identifies one. */
+  async backfillVenueLinks(): Promise<number> {
+    const rows = await this.db
+      .select({
+        id: events.id,
+        title: events.title,
+        venue: events.venue,
+        location: events.location,
+      })
+      .from(events)
+      .where(isNull(events.venueId));
+
+    const ids = await this.venueIds();
+    let linked = 0;
+
+    for (const row of rows) {
+      const facts = findVenueFacts(row.venue, row.location, row.title);
+      if (!facts) continue;
+      const venueId = ids.get(facts.slug);
+      if (!venueId) continue;
+      await this.db.update(events).set({ venueId }).where(eq(events.id, row.id));
+      linked += 1;
+    }
+
+    return linked;
+  }
+
   async backfillNeighborhoods(): Promise<number> {
     let filled = 0;
 
@@ -1200,6 +1293,34 @@ export class MemStorage implements IStorage {
   private restaurantOpenings: Map<string, RestaurantOpening> = new Map();
 
   private tentpoles: Map<string, Tentpole> = new Map();
+  private venues: Map<string, Venue> = new Map();
+
+  // Venues
+  async getVenueById(id: string): Promise<Venue | undefined> {
+    return this.venues.get(id);
+  }
+
+  /** Resolve curated facts to a stored venue id, seeding the map on demand. */
+  private venueIdForSlug(slug: string): string | null {
+    const existing = Array.from(this.venues.values()).find((v) => v.slug === slug);
+    return existing?.id ?? null;
+  }
+
+  async backfillVenueLinks(): Promise<number> {
+    let linked = 0;
+
+    for (const [id, event] of Array.from(this.events.entries())) {
+      if (event.venueId) continue;
+      const facts = findVenueFacts(event.venue, event.location, event.title);
+      if (!facts) continue;
+      const venueId = this.venueIdForSlug(facts.slug);
+      if (!venueId) continue;
+      this.events.set(id, { ...event, venueId });
+      linked += 1;
+    }
+
+    return linked;
+  }
 
   // Tentpoles
   async getTentpoles(): Promise<Tentpole[]> {
@@ -1426,6 +1547,15 @@ export class MemStorage implements IStorage {
       isIndoor: insertEvent.isIndoor ?? null,
       isSkywalkAccessible: insertEvent.isSkywalkAccessible ?? null,
       weatherBackup: insertEvent.weatherBackup ?? null,
+      insiderTip: insertEvent.insiderTip ?? null,
+      venueId: (() => {
+        const facts = findVenueFacts(
+          insertEvent.venue,
+          insertEvent.location,
+          insertEvent.title,
+        );
+        return facts ? this.venueIdForSlug(facts.slug) : null;
+      })(),
       id,
       createdAt: new Date(),
     };
@@ -1789,6 +1919,32 @@ export class MemStorage implements IStorage {
       }
     }
 
+    if (this.venues.size === 0) {
+      const bySlug = new Map(
+        Array.from(this.neighborhoods.values()).map((n) => [n.slug, n.id]),
+      );
+      for (const venue of seedVenues) {
+        const id = randomUUID();
+        this.venues.set(id, {
+          id,
+          slug: venue.slug,
+          name: venue.name,
+          address: venue.address ?? null,
+          neighborhoodId: venue.neighborhoodSlug
+            ? (bySlug.get(venue.neighborhoodSlug) ?? null)
+            : null,
+          lat: venue.lat ?? null,
+          lng: venue.lng ?? null,
+          parkingNotes: venue.parkingNotes ?? null,
+          nearbyEats: venue.nearbyEats ?? null,
+          kidNotes: venue.kidNotes ?? null,
+          isIndoor: venue.isIndoor,
+          isSkywalkAccessible: venue.isSkywalkAccessible,
+          websiteUrl: venue.websiteUrl ?? null,
+        });
+      }
+    }
+
     if (this.tentpoles.size === 0) {
       const bySlug = new Map(
         Array.from(this.neighborhoods.values()).map((n) => [n.slug, n.id]),
@@ -2021,6 +2177,11 @@ export async function initializeStorage(): Promise<void> {
     const flagged = await storage.backfillEventFlags();
     if (flagged > 0) {
       console.log(`[storage] Filled practical flags on ${flagged} event(s).`);
+    }
+
+    const linked = await storage.backfillVenueLinks();
+    if (linked > 0) {
+      console.log(`[storage] Linked ${linked} event(s) to a curated venue.`);
     }
 
     const classified = await storage.backfillNeighborhoods();

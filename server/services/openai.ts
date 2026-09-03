@@ -95,8 +95,19 @@ Include 3-5 items per category. Only include real places that exist in Des Moine
 }
 
 
+/** Curated facts handed to the model. It may use these and nothing else. */
+export interface VenueContext {
+  name: string;
+  neighborhood?: string | null;
+  parkingNotes?: string | null;
+  nearbyEats?: Array<{ name: string; note: string }> | null;
+  kidNotes?: string | null;
+}
+
 export interface EnhancedEventContent {
   description: string;
+  /** One sentence of local advice, or null when we had nothing to base it on. */
+  insiderTip: string | null;
   category: EventCategory;
   secondaryCategories: EventCategory[];
   /** Flags the model inferred. Null means it could not tell. */
@@ -125,15 +136,38 @@ export async function enhanceAndCategorizeEvent(input: {
   venue?: string | null;
   price?: string | null;
   rawCategory?: string | null;
+  /** Curated venue knowledge, when we recognise the venue. */
+  venueContext?: VenueContext | null;
 }): Promise<EnhancedEventContent> {
   const fallbackCategory = normalizeCategory(input.rawCategory, input.title);
 
   const fallback: EnhancedEventContent = {
     description: input.description,
+    insiderTip: null,
     category: fallbackCategory,
     secondaryCategories: [],
     flags: { isFree: null, isKidFriendly: null, ageRange: null, isIndoor: null },
   };
+
+  // Only facts we have actually curated reach the model. Anything absent is
+  // simply not mentioned, rather than left for the model to fill in.
+  const venue = input.venueContext;
+  const venueFacts: string[] = [];
+  if (venue) {
+    venueFacts.push(`Venue: ${venue.name}`);
+    if (venue.neighborhood) venueFacts.push(`Neighborhood: ${venue.neighborhood}`);
+    if (venue.parkingNotes) venueFacts.push(`Parking: ${venue.parkingNotes}`);
+    if (venue.kidNotes) venueFacts.push(`With children: ${venue.kidNotes}`);
+    if (venue.nearbyEats?.length) {
+      venueFacts.push(
+        `Nearby food: ${venue.nearbyEats.map((e) => `${e.name} (${e.note})`).join("; ")}`,
+      );
+    }
+  }
+
+  const venueBlock = venueFacts.length
+    ? `\nVerified local knowledge about this venue. Use these facts and no others:\n${venueFacts.join("\n")}\n`
+    : "";
 
   try {
     const response = await openai.chat.completions.create({
@@ -149,6 +183,7 @@ export async function enhanceAndCategorizeEvent(input: {
         {
           role: "user",
           content: `Rewrite this event description and categorize it.
+${venueBlock}
 
 Title: ${input.title}
 Original description: ${input.description}
@@ -168,13 +203,19 @@ Rules for the categories:
 - Use "Free" as a secondary category when the price is clearly free
 - Use "High School Sports" rather than "Sports" for high school events
 
+Rules for the insider tip:
+- One sentence of genuinely useful local advice, or null
+- Base it ONLY on the verified local knowledge above. If none was provided, return null
+- Practical over promotional: where to park, when to arrive, what to bring
+- Never invent a detail that is not in the facts above
+
 Rules for the flags. Use null whenever the text does not say, and do NOT guess:
 - "isFree": true only if attending costs nothing
 - "isKidFriendly": false for 21+ or adults-only events, true only if children are welcome
 - "ageRange": a short label like "All ages", "Ages 5-12" or "21+", else null
 - "isIndoor": true if it is held inside, false if outside, null if unclear
 
-Respond as JSON: {"description": string, "category": string, "secondaryCategories": string[], "isFree": boolean|null, "isKidFriendly": boolean|null, "ageRange": string|null, "isIndoor": boolean|null}`,
+Respond as JSON: {"description": string, "insiderTip": string|null, "category": string, "secondaryCategories": string[], "isFree": boolean|null, "isKidFriendly": boolean|null, "ageRange": string|null, "isIndoor": boolean|null}`,
         },
       ],
       response_format: { type: "json_object" },
@@ -186,6 +227,7 @@ Respond as JSON: {"description": string, "category": string, "secondaryCategorie
 
     const parsed = JSON.parse(content) as {
       description?: unknown;
+      insiderTip?: unknown;
       category?: unknown;
       secondaryCategories?: unknown;
     };
@@ -208,6 +250,14 @@ Respond as JSON: {"description": string, "category": string, "secondaryCategorie
         typeof parsed.description === "string" && parsed.description.trim().length > 0
           ? parsed.description.trim()
           : input.description,
+      // A tip without curated facts behind it would be invention, so it is
+      // dropped regardless of what the model returned.
+      insiderTip:
+        venueFacts.length > 0 &&
+        typeof record.insiderTip === "string" &&
+        record.insiderTip.trim().length > 0
+          ? record.insiderTip.trim().slice(0, 240)
+          : null,
       category,
       secondaryCategories: normalizeSecondaryCategories(
         parsed.secondaryCategories,

@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   Calendar,
   ExternalLink,
+  Lightbulb,
   MapPin,
   Sparkles,
   Ticket,
@@ -187,6 +188,16 @@ export default function EventPage() {
             </div>
           )}
         </div>
+
+        {event.insiderTip && (
+          <section className="mb-8 bg-accent/10 border border-accent/20 rounded-xl p-5">
+            <h2 className="font-bold text-neutral-900 mb-1 flex items-center">
+              <Lightbulb className="h-5 w-5 mr-2 text-accent" />
+              Insider tip
+            </h2>
+            <p className="text-neutral-700">{event.insiderTip}</p>
+          </section>
+        )}
 
         <div className="prose max-w-none mb-8">
           <h2 className="text-xl font-semibold text-neutral-900 mb-3">About this event</h2>

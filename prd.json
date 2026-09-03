@@ -420,7 +420,7 @@
         "Event pages render an 'Insider Tip' callout when present.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016",
