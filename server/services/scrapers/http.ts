@@ -28,19 +28,59 @@ export class HttpError extends Error {
   }
 }
 
+const MAX_REDIRECTS = 5;
+
+/**
+ * Follow redirects ourselves, carrying cookies forward.
+ *
+ * `fetch` follows redirects but drops Set-Cookie, and some platforms — college
+ * athletics sites among them — set a session cookie and redirect back to the
+ * same URL to check it came back. Without the cookie that is an infinite loop,
+ * which surfaces as "redirect count exceeded" rather than anything that hints
+ * at cookies. Only the cookie name and value are kept, which is all a session
+ * handshake needs and avoids storing anything else the site sends.
+ */
 async function request(url: string, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const cookies = new Map<string, string>();
+  let target = url;
+
   try {
-    return await fetch(url, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: {
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+      const headers: Record<string, string> = {
         "user-agent": USER_AGENT,
         accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         "accept-language": "en-US,en;q=0.9",
-      },
-    });
+      };
+      if (cookies.size > 0) {
+        headers.cookie = Array.from(cookies, ([name, value]) => `${name}=${value}`).join("; ");
+      }
+
+      const response = await fetch(target, {
+        signal: controller.signal,
+        redirect: "manual",
+        headers,
+      });
+
+      for (const raw of response.headers.getSetCookie?.() ?? []) {
+        const [pair] = raw.split(";");
+        const separator = pair.indexOf("=");
+        if (separator > 0) {
+          cookies.set(pair.slice(0, separator).trim(), pair.slice(separator + 1).trim());
+        }
+      }
+
+      const location = response.headers.get("location");
+      if (response.status >= 300 && response.status < 400 && location) {
+        target = new URL(location, target).toString();
+        continue;
+      }
+
+      return response;
+    }
+
+    throw new Error(`Too many redirects fetching ${url}`);
   } finally {
     clearTimeout(timer);
   }

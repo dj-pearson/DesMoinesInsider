@@ -2,6 +2,9 @@ import { altoona } from "./altoona.js";
 import { ankeny, johnston, urbandale, waukee, westDesMoines } from "./cities.js";
 import { artCenter } from "./artCenter.js";
 import { desMoinesLibrary } from "./dsmLibrary.js";
+import { drakeAthletics } from "./drake.js";
+import { iahsaa } from "./iahsaa.js";
+import { ighsau } from "./ighsau.js";
 import { desMoinesParks } from "./dsmParks.js";
 import { polkCountyConservation } from "./polkConservation.js";
 import { valleyJunction } from "./valleyJunction.js";
@@ -58,6 +61,12 @@ export const SOURCES: EventSource[] = [
   waukee,
   westDesMoines,
   altoona,
+  // Sport is a cultural pillar here and was entirely absent: Drake fills the
+  // Knapp Center on a Valley night, and state tournament week fills Wells Fargo
+  // Arena. Neither appears on a visitor calendar.
+  drakeAthletics,
+  iahsaa,
+  ighsau,
 ];
 
 /**

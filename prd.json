@@ -539,7 +539,7 @@
         "Events are categorized 'Sports' or 'High School Sports' with venue set (Knapp Center, Drake Stadium, Wells Fargo Arena, Principal Park).",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-022",
