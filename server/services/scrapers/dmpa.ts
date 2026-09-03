@@ -1,6 +1,7 @@
 import { absoluteUrl, fetchHtml } from "./http.js";
 import { isPlausibleEventDate, parseEventDate } from "./dates.js";
 import { elementsByClass, firstHref, firstImage, textByClass } from "./html.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -62,6 +63,7 @@ export const desMoinesPerformingArts: EventSource = {
   name: "Des Moines Performing Arts",
   defaultCategory: "Arts",
   venueSlug: "des-moines-civic-center",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   async scrape() {
     return parseDmpaEvents(await fetchHtml(LISTING_URL, 30_000));
   },

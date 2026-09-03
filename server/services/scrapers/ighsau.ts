@@ -3,6 +3,7 @@ import { isPlausibleEventDate } from "./dates.js";
 import { attrOf, elementsByClass, textOf } from "./html.js";
 import { toStateTournamentEvent } from "./stateTournaments.js";
 import { zonedTimeToUtc, getZonedParts } from "@shared/weekend.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -64,6 +65,7 @@ export const ighsau: EventSource = {
   name: "Iowa Girls High School Athletic Union",
   defaultCategory: "High School Sports",
   venueSlug: "wells-fargo-arena",
+  sourcePriority: SOURCE_PRIORITY.GOVERNING_BODY,
   async scrape(): Promise<ScrapedEvent[]> {
     const now = new Date();
     const start = getZonedParts(now);

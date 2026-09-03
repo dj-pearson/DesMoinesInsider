@@ -2,6 +2,7 @@ import { fetchJson } from "./http.js";
 import { isPlausibleEventDate, parseLocalTimestamp } from "./dates.js";
 import { textOf } from "./html.js";
 import { freeUnlessPriced } from "./civic.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -95,6 +96,7 @@ export const desMoinesLibrary: EventSource = {
   name: "Des Moines Public Library",
   defaultCategory: "Community",
   venueSlug: "des-moines-central-library",
+  sourcePriority: SOURCE_PRIORITY.CIVIC,
   async scrape() {
     return parseLibraryEvents(await fetchJson<LibraryEvent[]>(FEED_URL, 40_000));
   },

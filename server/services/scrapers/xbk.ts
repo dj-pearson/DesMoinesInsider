@@ -1,5 +1,6 @@
 import { fetchHtml } from "./http.js";
 import { parseSeeTicketsEvents } from "./seetickets.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource } from "./types.js";
 
 /**
@@ -15,6 +16,7 @@ export const xbkLive: EventSource = {
   name: "xBk Live",
   defaultCategory: "Music",
   venueSlug: "xbk-live",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   async scrape() {
     return parseSeeTicketsEvents(await fetchHtml(LISTING_URL), {
       listingUrl: LISTING_URL,

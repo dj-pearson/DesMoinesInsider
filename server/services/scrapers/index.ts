@@ -11,6 +11,7 @@ import { valleyJunction } from "./valleyJunction.js";
 import { adventureland } from "./adventureland.js";
 import { blankParkZoo } from "./blankParkZoo.js";
 import { botanicalGarden } from "./botanicalGarden.js";
+import { catchDesMoines } from "./catchDesMoines.js";
 import { desMoinesPerformingArts } from "./dmpa.js";
 import { iowaStateFairgrounds } from "./fairgrounds.js";
 import { jasperWinery } from "./jasperWinery.js";
@@ -19,9 +20,11 @@ import { livingHistoryFarms } from "./livingHistoryFarms.js";
 import { scienceCenter } from "./scienceCenter.js";
 import { woolys } from "./woolys.js";
 import { xbkLive } from "./xbk.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent, SourceRunResult } from "./types.js";
 
 export type { EventSource, SourceRunResult };
+export { SOURCE_PRIORITY };
 
 /**
  * Every venue we pull events from.
@@ -67,6 +70,10 @@ export const SOURCES: EventSource[] = [
   drakeAthletics,
   iahsaa,
   ighsau,
+  // Fallback only. The tourism bureau reaches events nothing else here does,
+  // but it is a copy of someone else's listing, so it ranks below every direct
+  // source and loses every tie.
+  catchDesMoines,
 ];
 
 /**
@@ -88,7 +95,13 @@ export interface ScrapeSourcesResult {
 async function runOne(source: EventSource): Promise<{ events: ScrapedEvent[]; run: SourceRunResult }> {
   const startedAt = Date.now();
   try {
-    const events = await source.scrape();
+    // Stamp the source's rank onto every event as it comes back, so
+    // deduplication can pick a winner later without knowing which scraper
+    // produced which event.
+    const events = (await source.scrape()).map((event) => ({
+      ...event,
+      sourcePriority: event.sourcePriority ?? source.sourcePriority,
+    }));
     const run: SourceRunResult = {
       source: source.name,
       ok: true,

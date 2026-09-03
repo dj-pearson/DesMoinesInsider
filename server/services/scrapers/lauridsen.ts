@@ -1,4 +1,5 @@
 import { scrapeTribeCalendar } from "./tribe.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource } from "./types.js";
 
 /**
@@ -11,6 +12,7 @@ export const lauridsenAmphitheater: EventSource = {
   name: "Lauridsen Amphitheater at Water Works Park",
   defaultCategory: "Music",
   venueSlug: "lauridsen-amphitheater",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   scrape: () =>
     scrapeTribeCalendar({
       origin: "https://www.dsmwaterworkspark.com",

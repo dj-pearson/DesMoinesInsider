@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage.js";
 import { scrapeAllSources, deduplicateEvents } from "./services/scraper.js";
+import { repairAggregatorLinks } from "./services/scrapers/linkRepair.js";
 import { enhanceEvents } from "./services/eventEnhancer.js";
 import {
   insertEventSubmissionSchema,
@@ -106,6 +107,14 @@ async function runComprehensiveScrape(): Promise<{
       })),
     ),
   ]);
+
+  // Repair links on events stored before the direct sources existed. Runs after
+  // storage so a failure here cannot cost us the scrape itself.
+  try {
+    await repairAggregatorLinks(storage);
+  } catch (error) {
+    console.error("Failed to repair aggregator links:", error);
+  }
 
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(

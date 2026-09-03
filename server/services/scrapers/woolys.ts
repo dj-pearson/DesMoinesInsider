@@ -1,6 +1,7 @@
 import { fetchHtml } from "./http.js";
 import { parseJsonLdEvents } from "./jsonld.js";
 import { parseSeeTicketsEvents } from "./seetickets.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -48,6 +49,7 @@ export const woolys: EventSource = {
   name: "Wooly's",
   defaultCategory: "Music",
   venueSlug: "woolys",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   async scrape() {
     const events = parseWoolysEvents(await fetchHtml(LISTING_URL, 30_000));
     if (events.length === 0) {

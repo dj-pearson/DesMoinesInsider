@@ -1,6 +1,7 @@
 import { absoluteUrl, fetchHtml } from "./http.js";
 import { isPlausibleEventDate, parseEventDate } from "./dates.js";
 import { elementsByClass, firstHref, headingText, textOf } from "./html.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -57,6 +58,7 @@ export const iowaStateFairgrounds: EventSource = {
   name: "Iowa State Fairgrounds",
   defaultCategory: "Community",
   venueSlug: "iowa-state-fairgrounds",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   async scrape() {
     return parseFairgroundsEvents(await fetchHtml(CALENDAR_URL));
   },

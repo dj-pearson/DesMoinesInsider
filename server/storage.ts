@@ -183,6 +183,10 @@ export interface IStorage {
   setTipStatus(id: string, status: "visible" | "hidden"): Promise<Tip | undefined>;
   getUserTipFor(userId: string, targetType: string, targetId: string): Promise<Tip | undefined>;
 
+  /** Events whose sourceUrl points at the given host, for link repair. */
+  getEventsBySourceHost(host: string, limit?: number): Promise<Event[]>;
+  setEventSourceUrl(id: string, sourceUrl: string): Promise<void>;
+
   // Scrape health
   recordScrapeRuns(runs: InsertScrapeRun[]): Promise<void>;
   /** Most recent run per source, newest first. */
@@ -1016,6 +1020,19 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
     return row;
+  }
+
+  async getEventsBySourceHost(host: string, limit = 200): Promise<Event[]> {
+    return this.db
+      .select()
+      .from(events)
+      .where(and(gte(events.date, new Date()), ilike(events.sourceUrl, `%${host}%`)))
+      .orderBy(events.date)
+      .limit(limit);
+  }
+
+  async setEventSourceUrl(id: string, sourceUrl: string): Promise<void> {
+    await this.db.update(events).set({ sourceUrl }).where(eq(events.id, id));
   }
 
   // Scrape health
@@ -2138,6 +2155,19 @@ export class MemStorage implements IStorage {
         tip.targetType === targetType &&
         tip.targetId === targetId,
     );
+  }
+
+  async getEventsBySourceHost(host: string, limit = 200): Promise<Event[]> {
+    const now = new Date();
+    return Array.from(this.events.values())
+      .filter((event) => event.sourceUrl?.includes(host) && new Date(event.date) >= now)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      .slice(0, limit);
+  }
+
+  async setEventSourceUrl(id: string, sourceUrl: string): Promise<void> {
+    const event = this.events.get(id);
+    if (event) this.events.set(id, { ...event, sourceUrl });
   }
 
   // Scrape health

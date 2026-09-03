@@ -2,6 +2,7 @@ import { fetchHtml } from "./http.js";
 import { isPlausibleEventDate, parseEventDate } from "./dates.js";
 import { elementsByClass, headingText, textOf } from "./html.js";
 import { toStateTournamentEvent } from "./stateTournaments.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -58,6 +59,7 @@ export const iahsaa: EventSource = {
   name: "Iowa High School Athletic Association",
   defaultCategory: "High School Sports",
   venueSlug: "wells-fargo-arena",
+  sourcePriority: SOURCE_PRIORITY.GOVERNING_BODY,
   async scrape() {
     return parseIahsaaEvents(await fetchHtml(CALENDAR_URL, 30_000));
   },

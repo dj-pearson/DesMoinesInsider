@@ -1,7 +1,7 @@
 import { classifyOpeningStatus } from '@shared/openingStatus.js';
 import type { OpeningStatus } from '@shared/schema.js';
 import puppeteer from "puppeteer";
-import { scrapeSources } from "./scrapers/index.js";
+import { scrapeSources, SOURCE_PRIORITY } from "./scrapers/index.js";
 import type { SourceRunResult } from "./scrapers/types.js";
 
 export interface ScrapedEvent {
@@ -27,6 +27,11 @@ export interface ScrapedEvent {
    * only guesses. Set this and the guess is skipped.
    */
   neighborhoodSlug?: string;
+  /**
+   * Rank of the source this came from, used to pick a winner when two sources
+   * list the same event. See SOURCE_PRIORITY in scrapers/types.ts.
+   */
+  sourcePriority?: number;
 }
 
 export interface ScrapedRestaurant {
@@ -604,22 +609,93 @@ async function scrapeRegisterSearch(searchUrl: string): Promise<ScrapedRestauran
 }
 
 // Event deduplication utility
-export function deduplicateEvents(existingEvents: ScrapedEvent[], newEvents: ScrapedEvent[]): ScrapedEvent[] {
-  const uniqueEvents: ScrapedEvent[] = [];
-  
-  for (const newEvent of newEvents) {
-    const isDuplicate = existingEvents.some(existing => 
-      existing.title.toLowerCase() === newEvent.title.toLowerCase() &&
-      Math.abs(existing.date.getTime() - newEvent.date.getTime()) < 24 * 60 * 60 * 1000 && // Same day
-      existing.venue?.toLowerCase() === newEvent.venue?.toLowerCase()
-    );
-    
-    if (!isDuplicate) {
-      uniqueEvents.push(newEvent);
+/**
+ * Hosts that copy other people's events.
+ *
+ * Sending a reader to catchdesmoines.com when the venue has its own page is a
+ * worse link twice over: an extra click before they can buy a ticket, and a
+ * page that may already be out of date about a show the venue itself just
+ * rescheduled.
+ */
+const AGGREGATOR_HOSTS = [
+  "catchdesmoines.com",
+  "google.com",
+  "eventbrite.com",
+];
+
+export function isAggregatorUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return AGGREGATOR_HOSTS.some((known) => host === known || host.endsWith(`.${known}`));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * How much we trust an event, for choosing between two copies of the same one.
+ *
+ * An explicit rank from the source wins. Failing that the URL decides, which is
+ * what makes this work on events already in the database: those were stored
+ * before ranks existed and carry only a link, but a catchdesmoines.com link is
+ * all the evidence needed to know it should lose to a venue's own listing.
+ */
+export function eventPriority(event: ScrapedEvent): number {
+  if (typeof event.sourcePriority === "number") return event.sourcePriority;
+  return isAggregatorUrl(event.sourceUrl)
+    ? SOURCE_PRIORITY.AGGREGATOR
+    : SOURCE_PRIORITY.DIRECT_VENUE;
+}
+
+/** Same event, listed twice? Same title, same venue, within a day. */
+function isSameEvent(a: ScrapedEvent, b: ScrapedEvent): boolean {
+  return (
+    a.title.trim().toLowerCase() === b.title.trim().toLowerCase() &&
+    Math.abs(a.date.getTime() - b.date.getTime()) < 24 * 60 * 60 * 1000 &&
+    (a.venue ?? "").trim().toLowerCase() === (b.venue ?? "").trim().toLowerCase()
+  );
+}
+
+/**
+ * Reduce a freshly scraped batch to the events worth storing.
+ *
+ * Two passes, and the first one is the one that was missing: the batch is
+ * deduplicated against itself. Twenty-five sources overlap heavily now — the
+ * tourism bureau lists the same touring musical the theatre does — and without
+ * this both copies were stored, so the site showed the show twice, once with a
+ * link to the box office and once with a link to the bureau.
+ *
+ * Where two copies match, the higher-ranked source wins outright. Ties are
+ * broken by keeping the one already held, so a run is stable: scraping twice
+ * with nothing changed produces the same result.
+ */
+export function deduplicateEvents(
+  existingEvents: ScrapedEvent[],
+  newEvents: ScrapedEvent[],
+): ScrapedEvent[] {
+  const best: ScrapedEvent[] = [];
+
+  for (const candidate of newEvents) {
+    const index = best.findIndex((kept) => isSameEvent(kept, candidate));
+    if (index < 0) {
+      best.push(candidate);
+      continue;
+    }
+    if (eventPriority(candidate) > eventPriority(best[index])) {
+      best[index] = candidate;
     }
   }
-  
-  return uniqueEvents;
+
+  // Then against what is already stored. An event we already have is skipped,
+  // unless the new copy comes from a better source than the stored one did --
+  // that is an upgrade from an aggregator's link to the venue's own, and it is
+  // worth taking.
+  return best.filter((candidate) => {
+    const stored = existingEvents.find((existing) => isSameEvent(existing, candidate));
+    if (!stored) return true;
+    return eventPriority(candidate) > eventPriority(stored);
+  });
 }
 
 // Master scraping function
@@ -688,24 +764,30 @@ export async function scrapeAllSources(): Promise<{
   const allEvents: ScrapedEvent[] = [...venueEvents];
   const allRestaurants: ScrapedRestaurant[] = [];
 
-  const aggregators = [
-    { name: 'Google Events', scraper: () => scrapeGoogleEvents() },
-    { name: 'Catch Des Moines', scraper: () => scrapeCatchDesMoinesWithDirectLinks() },
-    { name: 'Eventbrite', scraper: () => scrapeEventbrite() },
-    { name: 'Vibrant Music Hall', scraper: () => scrapeVibrantMusicHall() },
-    { name: 'Hoyt Sherman', scraper: () => scrapeHoytSherman() },
-    { name: 'Val Aire Ballroom', scraper: () => scrapeValAireBallroom() },
-    { name: 'Iowa Wild', scraper: () => scrapeIowaWild() },
-    { name: 'Iowa Wolves', scraper: () => scrapeIowaWolves() },
-    { name: 'Iowa Cubs', scraper: () => scrapeIowaCubs() },
-    { name: 'Iowa Barnstormers', scraper: () => scrapeIowaBarnstormers() },
-    { name: 'Iowa Events Center', scraper: () => scrapeIowaEventsCenter() },
+  // Catch Des Moines is no longer here: it moved into ./scrapers as a ranked
+  // fallback source that reads their RSS feed instead of driving a browser
+  // through their calendar. Google search results stay, ranked as an
+  // aggregator, because they still reach events nothing else does.
+  const legacySources = [
+    { name: 'Google Events', priority: SOURCE_PRIORITY.AGGREGATOR, scraper: () => scrapeGoogleEvents() },
+    { name: 'Eventbrite', priority: SOURCE_PRIORITY.AGGREGATOR, scraper: () => scrapeEventbrite() },
+    { name: 'Vibrant Music Hall', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeVibrantMusicHall() },
+    { name: 'Hoyt Sherman', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeHoytSherman() },
+    { name: 'Val Aire Ballroom', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeValAireBallroom() },
+    { name: 'Iowa Wild', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeIowaWild() },
+    { name: 'Iowa Wolves', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeIowaWolves() },
+    { name: 'Iowa Cubs', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeIowaCubs() },
+    { name: 'Iowa Barnstormers', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeIowaBarnstormers() },
+    { name: 'Iowa Events Center', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeIowaEventsCenter() },
   ];
 
-  for (const source of aggregators) {
+  for (const source of legacySources) {
     const startedAt = Date.now();
     try {
-      const events = await source.scraper();
+      const events = (await source.scraper()).map((event) => ({
+        ...event,
+        sourcePriority: event.sourcePriority ?? source.priority,
+      }));
       allEvents.push(...events);
       runs.push({
         source: source.name,

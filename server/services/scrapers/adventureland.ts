@@ -3,6 +3,7 @@ import { parseJsonLdEvents } from "./jsonld.js";
 import { isPlausibleEventDate, parseEventDate } from "./dates.js";
 import { elementsByClass, firstHref, firstImage, headingText, textOf } from "./html.js";
 import { absoluteUrl } from "./http.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -64,6 +65,7 @@ export const adventureland: EventSource = {
   name: "Adventureland",
   defaultCategory: "Family",
   venueSlug: "adventureland",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   async scrape() {
     return parseAdventurelandEvents(await fetchHtml(LISTING_URL, 30_000));
   },

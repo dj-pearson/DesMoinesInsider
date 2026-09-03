@@ -3,6 +3,7 @@ import { isPlausibleEventDate, parseEventDate } from "./dates.js";
 import { decodeEntities } from "./html.js";
 import { zonedTimeToUtc } from "@shared/weekend.js";
 import { getZonedParts } from "@shared/weekend.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -81,6 +82,7 @@ export const jasperWinery: EventSource = {
   name: "Jasper Winery",
   defaultCategory: "Music",
   venueSlug: "jasper-winery",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   async scrape() {
     return parseJasperEvents(await fetchHtml(SERIES_URL, 30_000));
   },

@@ -557,7 +557,7 @@
         "A `sourcePriority` integer on each source controls dedup winner selection. Direct venue sources rank above aggregators.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     }
   ],
   "definitionOfDone": [

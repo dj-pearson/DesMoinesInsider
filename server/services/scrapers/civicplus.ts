@@ -3,6 +3,7 @@ import { parseIcal } from "./ical.js";
 import { isPlausibleEventDate } from "./dates.js";
 import { decodeEntities, textOf } from "./html.js";
 import { freeUnlessPriced, isAdministrativeEvent } from "./civic.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -109,6 +110,7 @@ export function createCivicPlusSource(config: CivicPlusConfig): EventSource {
     defaultCategory: "Community",
     // A city calendar spans parks, libraries and main street, not one venue.
     venueSlug: null,
+    sourcePriority: SOURCE_PRIORITY.CIVIC,
     async scrape(): Promise<ScrapedEvent[]> {
       const now = new Date();
       const directory = await fetchHtml(`${config.origin}/iCalendar.aspx`, 30_000);

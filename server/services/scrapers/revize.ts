@@ -2,6 +2,7 @@ import { fetchHtml, fetchJson } from "./http.js";
 import { isPlausibleEventDate, parseLocalTimestamp } from "./dates.js";
 import { textOf } from "./html.js";
 import { freeUnlessPriced, isAdministrativeEvent } from "./civic.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -96,6 +97,7 @@ export function createRevizeSource(config: RevizeConfig): EventSource {
     name: config.sourceName,
     defaultCategory: config.category,
     venueSlug: null,
+    sourcePriority: SOURCE_PRIORITY.CIVIC,
     async scrape(): Promise<ScrapedEvent[]> {
       const page = await fetchHtml(config.calendarPage, 30_000);
       const webspace = parseWebspace(page);

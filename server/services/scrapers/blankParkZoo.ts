@@ -1,6 +1,7 @@
 import { fetchHtml, fetchJson } from "./http.js";
 import { isPlausibleEventDate, parseLocalTimestamp } from "./dates.js";
 import { textOf } from "./html.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -60,6 +61,7 @@ export const blankParkZoo: EventSource = {
   name: "Blank Park Zoo",
   defaultCategory: "Family",
   venueSlug: "blank-park-zoo",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   async scrape(): Promise<ScrapedEvent[]> {
     const now = new Date();
     const config = parseWidgetConfig(await fetchHtml(EVENTS_PAGE));

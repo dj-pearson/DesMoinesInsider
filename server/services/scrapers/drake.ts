@@ -1,5 +1,6 @@
 import { fetchHtml } from "./http.js";
 import { isHomeInDesMoines, parseSidearmSchedule } from "./sidearm.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -67,6 +68,7 @@ export const drakeAthletics: EventSource = {
   name: "Drake Bulldogs Athletics",
   defaultCategory: "Sports",
   venueSlug: "knapp-center",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   async scrape(): Promise<ScrapedEvent[]> {
     const now = new Date();
     const slugs = parseSportSlugs(await fetchHtml(`${ORIGIN}/calendar`, 30_000));

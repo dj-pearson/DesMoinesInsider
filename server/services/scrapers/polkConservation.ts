@@ -2,6 +2,7 @@ import { absoluteUrl, fetchHtml } from "./http.js";
 import { isPlausibleEventDate, parseEventDate } from "./dates.js";
 import { elementsByClass, firstHref, firstImage, headingText, textOf } from "./html.js";
 import { freeUnlessPriced } from "./civic.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -67,6 +68,7 @@ export const polkCountyConservation: EventSource = {
   name: "Polk County Conservation",
   defaultCategory: "Outdoors",
   venueSlug: null,
+  sourcePriority: SOURCE_PRIORITY.CIVIC,
   async scrape() {
     return parsePolkEvents(await fetchHtml(FEED_URL, 40_000));
   },

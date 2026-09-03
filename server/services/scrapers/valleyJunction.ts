@@ -1,4 +1,5 @@
 import { scrapeTribeCalendar } from "./tribe.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource } from "./types.js";
 
 /**
@@ -10,6 +11,7 @@ export const valleyJunction: EventSource = {
   name: "Historic Valley Junction",
   defaultCategory: "Community",
   venueSlug: "historic-valley-junction",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   scrape: () =>
     scrapeTribeCalendar({
       origin: "https://valleyjunction.com",

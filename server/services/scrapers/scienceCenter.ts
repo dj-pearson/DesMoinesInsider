@@ -2,6 +2,7 @@ import { fetchHtml } from "./http.js";
 import { isPlausibleEventDate, parseEventDate, parseTimeOfDay } from "./dates.js";
 import { elementsByClass, headingText, textByClass, textOf } from "./html.js";
 import { getZonedParts, zonedTimeToUtc } from "@shared/weekend.js";
+import { SOURCE_PRIORITY } from "./types.js";
 import type { EventSource, ScrapedEvent } from "./types.js";
 
 /**
@@ -85,6 +86,7 @@ export const scienceCenter: EventSource = {
   name: "Science Center of Iowa",
   defaultCategory: "Family",
   venueSlug: "science-center-of-iowa",
+  sourcePriority: SOURCE_PRIORITY.DIRECT_VENUE,
   async scrape() {
     return parseScienceCenterEvents(await fetchHtml(CALENDAR_URL));
   },
