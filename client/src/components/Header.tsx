@@ -21,6 +21,7 @@ export default function Header() {
           
           <nav className="hidden md:flex space-x-8">
             <a href="#events" className="text-neutral-500 hover:text-primary transition-colors">Events</a>
+            <a href="/neighborhoods" className="text-neutral-500 hover:text-primary transition-colors">Neighborhoods</a>
             <a href="#restaurants" className="text-neutral-500 hover:text-primary transition-colors">Restaurants</a>
             <a href="#attractions" className="text-neutral-500 hover:text-primary transition-colors">Attractions</a>
             <a href="#about" className="text-neutral-500 hover:text-primary transition-colors">About</a>
@@ -41,6 +42,7 @@ export default function Header() {
           <div className="md:hidden pb-4">
             <nav className="flex flex-col space-y-2">
               <a href="#events" className="text-neutral-500 hover:text-primary transition-colors py-2">Events</a>
+              <a href="/neighborhoods" className="text-neutral-500 hover:text-primary transition-colors py-2">Neighborhoods</a>
               <a href="#restaurants" className="text-neutral-500 hover:text-primary transition-colors py-2">Restaurants</a>
               <a href="#attractions" className="text-neutral-500 hover:text-primary transition-colors py-2">Attractions</a>
               <a href="#about" className="text-neutral-500 hover:text-primary transition-colors py-2">About</a>

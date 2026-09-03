@@ -257,7 +257,7 @@
         "Header nav gains a 'Neighborhoods' link.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-009",

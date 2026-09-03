@@ -7,12 +7,16 @@ import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import EventPage from "@/pages/event";
 import PlacePage from "@/pages/place";
+import NeighborhoodsPage from "@/pages/neighborhoods";
+import NeighborhoodPage from "@/pages/neighborhood";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/events/:slug" component={EventPage} />
+      <Route path="/neighborhoods" component={NeighborhoodsPage} />
+      <Route path="/neighborhoods/:slug" component={NeighborhoodPage} />
       <Route path="/restaurants/:slug">{() => <PlacePage kind="restaurants" />}</Route>
       <Route path="/attractions/:slug">{() => <PlacePage kind="attractions" />}</Route>
       <Route path="/playgrounds/:slug">{() => <PlacePage kind="playgrounds" />}</Route>

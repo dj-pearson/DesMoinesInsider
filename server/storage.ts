@@ -24,7 +24,20 @@ import {
   type RestaurantOpening,
   type User,
 } from "@shared/schema";
-import { and, arrayContains, asc, desc, eq, gte, ilike, isNull, or, sql } from "drizzle-orm";
+import {
+  and,
+  arrayContains,
+  asc,
+  desc,
+  eq,
+  gte,
+  ilike,
+  isNotNull,
+  isNull,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
 import { buildEventSlug, buildPlaceSlug, ensureUniqueSlug } from "@shared/slug";
 import { isEventCategory, normalizeCategory } from "@shared/categories";
 import { extractEventFlags, mergeFlags } from "@shared/eventFlags";
@@ -52,10 +65,21 @@ export interface NeighborhoodWithCounts extends Neighborhood {
   attractionCount: number;
 }
 
+/** Everything shown on a neighborhood's landing page. */
+export interface NeighborhoodContent {
+  neighborhood: NeighborhoodWithCounts;
+  upcomingEvents: Event[];
+  restaurantOpenings: RestaurantOpening[];
+  restaurants: Restaurant[];
+  attractions: Attraction[];
+  playgrounds: Playground[];
+}
+
 export interface IStorage {
   // Neighborhoods
-  getNeighborhoods(): Promise<Neighborhood[]>;
+  getNeighborhoods(): Promise<NeighborhoodWithCounts[]>;
   getNeighborhoodBySlug(slug: string): Promise<NeighborhoodWithCounts | undefined>;
+  getNeighborhoodContent(slug: string): Promise<NeighborhoodContent | undefined>;
 
   // Events
   getEvents(filters?: {
@@ -168,8 +192,116 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Neighborhoods
-  async getNeighborhoods(): Promise<Neighborhood[]> {
-    return this.db.select().from(neighborhoods).orderBy(asc(neighborhoods.name));
+  async getNeighborhoods(): Promise<NeighborhoodWithCounts[]> {
+    const rows = await this.db
+      .select()
+      .from(neighborhoods)
+      .orderBy(asc(neighborhoods.name));
+
+    // Five grouped queries rather than five per neighborhood: at 24
+    // neighborhoods the per-row version would be 120 round trips.
+    const tally = async (
+      table: typeof restaurants | typeof attractions | typeof playgrounds,
+    ) => {
+      const counts = await this.db
+        .select({ id: table.neighborhoodId, count: sql<number>`count(*)::int` })
+        .from(table)
+        .where(isNotNull(table.neighborhoodId))
+        .groupBy(table.neighborhoodId);
+      return new Map(counts.map((row) => [row.id, row.count]));
+    };
+
+    const [eventCounts, openingCounts, restaurantCounts, attractionCounts, playgroundCounts] =
+      await Promise.all([
+        this.db
+          .select({ id: events.neighborhoodId, count: sql<number>`count(*)::int` })
+          .from(events)
+          .where(and(isNotNull(events.neighborhoodId), gte(events.date, new Date())))
+          .groupBy(events.neighborhoodId)
+          .then((counts) => new Map(counts.map((row) => [row.id, row.count]))),
+        this.db
+          .select({
+            id: restaurantOpenings.neighborhoodId,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(restaurantOpenings)
+          .where(isNotNull(restaurantOpenings.neighborhoodId))
+          .groupBy(restaurantOpenings.neighborhoodId)
+          .then((counts) => new Map(counts.map((row) => [row.id, row.count]))),
+        tally(restaurants),
+        tally(attractions),
+        tally(playgrounds),
+      ]);
+
+    return rows.map((row) => ({
+      ...row,
+      upcomingEventCount: eventCounts.get(row.id) ?? 0,
+      restaurantOpeningCount: openingCounts.get(row.id) ?? 0,
+      restaurantCount: restaurantCounts.get(row.id) ?? 0,
+      attractionCount: attractionCounts.get(row.id) ?? 0,
+      playgroundCount: playgroundCounts.get(row.id) ?? 0,
+    }));
+  }
+
+  async getNeighborhoodContent(
+    slug: string,
+  ): Promise<NeighborhoodContent | undefined> {
+    const neighborhood = await this.getNeighborhoodBySlug(slug);
+    if (!neighborhood) return undefined;
+
+    const now = new Date();
+    // A month ahead is what people actually plan around; beyond that a
+    // neighborhood page turns into an undifferentiated calendar dump.
+    const horizon = new Date(now);
+    horizon.setDate(horizon.getDate() + 30);
+
+    const [upcomingEvents, openings, restaurantRows, attractionRows, playgroundRows] =
+      await Promise.all([
+        this.db
+          .select()
+          .from(events)
+          .where(
+            and(
+              eq(events.neighborhoodId, neighborhood.id),
+              gte(events.date, now),
+              lte(events.date, horizon),
+            ),
+          )
+          .orderBy(asc(events.date)),
+        this.db
+          .select()
+          .from(restaurantOpenings)
+          .where(eq(restaurantOpenings.neighborhoodId, neighborhood.id))
+          .orderBy(desc(restaurantOpenings.createdAt))
+          .limit(12),
+        this.db
+          .select()
+          .from(restaurants)
+          .where(eq(restaurants.neighborhoodId, neighborhood.id))
+          .orderBy(desc(restaurants.searchCount))
+          .limit(12),
+        this.db
+          .select()
+          .from(attractions)
+          .where(eq(attractions.neighborhoodId, neighborhood.id))
+          .orderBy(desc(attractions.searchCount))
+          .limit(12),
+        this.db
+          .select()
+          .from(playgrounds)
+          .where(eq(playgrounds.neighborhoodId, neighborhood.id))
+          .orderBy(desc(playgrounds.searchCount))
+          .limit(12),
+      ]);
+
+    return {
+      neighborhood,
+      upcomingEvents,
+      restaurantOpenings: openings,
+      restaurants: restaurantRows,
+      attractions: attractionRows,
+      playgrounds: playgroundRows,
+    };
   }
 
   async getNeighborhoodBySlug(
@@ -800,10 +932,62 @@ export class MemStorage implements IStorage {
   private restaurantOpenings: Map<string, RestaurantOpening> = new Map();
 
   // Neighborhoods
-  async getNeighborhoods(): Promise<Neighborhood[]> {
-    return Array.from(this.neighborhoods.values()).sort((a, b) =>
+  async getNeighborhoods(): Promise<NeighborhoodWithCounts[]> {
+    const rows = Array.from(this.neighborhoods.values()).sort((a, b) =>
       a.name.localeCompare(b.name),
     );
+
+    const now = new Date();
+    const countFor = (
+      items: Iterable<{ neighborhoodId: string | null }>,
+      id: string,
+    ) => Array.from(items).filter((item) => item.neighborhoodId === id).length;
+
+    return rows.map((row) => ({
+      ...row,
+      upcomingEventCount: Array.from(this.events.values()).filter(
+        (e) => e.neighborhoodId === row.id && new Date(e.date) >= now,
+      ).length,
+      restaurantOpeningCount: countFor(this.restaurantOpenings.values(), row.id),
+      restaurantCount: countFor(this.restaurants.values(), row.id),
+      attractionCount: countFor(this.attractions.values(), row.id),
+      playgroundCount: countFor(this.playgrounds.values(), row.id),
+    }));
+  }
+
+  async getNeighborhoodContent(
+    slug: string,
+  ): Promise<NeighborhoodContent | undefined> {
+    const neighborhood = await this.getNeighborhoodBySlug(slug);
+    if (!neighborhood) return undefined;
+
+    const now = new Date();
+    const horizon = new Date(now);
+    horizon.setDate(horizon.getDate() + 30);
+
+    const inArea = <T extends { neighborhoodId: string | null }>(
+      items: Iterable<T>,
+    ): T[] => Array.from(items).filter((item) => item.neighborhoodId === neighborhood.id);
+
+    const bySearch = <T extends { searchCount: number | null }>(rows: T[]): T[] =>
+      rows.sort((a, b) => (b.searchCount ?? 0) - (a.searchCount ?? 0)).slice(0, 12);
+
+    return {
+      neighborhood,
+      upcomingEvents: inArea(this.events.values())
+        .filter((e) => new Date(e.date) >= now && new Date(e.date) <= horizon)
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+      restaurantOpenings: inArea(this.restaurantOpenings.values())
+        .sort((a, b) => {
+          const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return bTime - aTime;
+        })
+        .slice(0, 12),
+      restaurants: bySearch(inArea(this.restaurants.values())),
+      attractions: bySearch(inArea(this.attractions.values())),
+      playgrounds: bySearch(inArea(this.playgrounds.values())),
+    };
   }
 
   async getNeighborhoodBySlug(

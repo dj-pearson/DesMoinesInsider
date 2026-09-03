@@ -94,13 +94,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Returns the neighborhood plus everything its landing page shows, so the
+  // page needs one request rather than five.
   app.get("/api/neighborhoods/:slug", async (req, res) => {
     try {
-      const neighborhood = await storage.getNeighborhoodBySlug(req.params.slug);
-      if (!neighborhood) {
+      const content = await storage.getNeighborhoodContent(req.params.slug);
+      if (!content) {
         return res.status(404).json({ message: "Neighborhood not found" });
       }
-      res.json(neighborhood);
+      res.json(content);
     } catch (error) {
       console.error("Failed to get neighborhood:", error);
       res.status(500).json({ message: "Failed to fetch neighborhood" });
