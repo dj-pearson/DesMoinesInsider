@@ -13,7 +13,7 @@ import {
 import { Label } from "@/components/ui/label";
 import EventCard from "./EventCard";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Event, Neighborhood } from "@shared/schema";
+import { EVENT_CATEGORIES, Event, Neighborhood } from "@shared/schema";
 import { Calendar } from "lucide-react";
 
 export default function EventFilters() {
@@ -126,11 +126,11 @@ export default function EventFilters() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="All Categories">All Categories</SelectItem>
-                  <SelectItem value="Music">Music</SelectItem>
-                  <SelectItem value="Food">Food & Drink</SelectItem>
-                  <SelectItem value="Art">Art & Culture</SelectItem>
-                  <SelectItem value="Outdoor">Outdoor</SelectItem>
-                  <SelectItem value="Family">Family</SelectItem>
+                  {EVENT_CATEGORIES.map((category) => (
+                    <SelectItem key={category} value={category}>
+                      {category}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

@@ -1,3 +1,4 @@
+import { EVENT_CATEGORIES } from "@shared/schema";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,10 +49,11 @@ export default function SearchSection({ onSearch, isSearching = false }: SearchS
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="All Categories">All Categories</SelectItem>
-                  <SelectItem value="Events">Events</SelectItem>
-                  <SelectItem value="Restaurants">Restaurants</SelectItem>
-                  <SelectItem value="Entertainment">Entertainment</SelectItem>
-                  <SelectItem value="Outdoor">Outdoor</SelectItem>
+                  {EVENT_CATEGORIES.map((category) => (
+                    <SelectItem key={category} value={category}>
+                      {category}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

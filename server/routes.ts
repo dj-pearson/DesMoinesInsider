@@ -399,11 +399,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const searchLower = query.toLowerCase();
       
-      const filteredEvents = events.filter(event => 
-        event.title.toLowerCase().includes(searchLower) ||
-        event.enhancedDescription?.toLowerCase().includes(searchLower) ||
-        event.location.toLowerCase().includes(searchLower)
-      );
+      const categoryFilter =
+        typeof category === "string" && category && category !== "All Categories"
+          ? category
+          : undefined;
+
+      const filteredEvents = events.filter((event) => {
+        const matchesText =
+          event.title.toLowerCase().includes(searchLower) ||
+          event.enhancedDescription?.toLowerCase().includes(searchLower) ||
+          event.location.toLowerCase().includes(searchLower);
+        if (!matchesText) return false;
+
+        // The dropdown lists event categories, so it narrows events only. A
+        // secondary category counts: a free outdoor concert should appear
+        // under Free as well as under Music.
+        if (!categoryFilter) return true;
+        return (
+          event.category === categoryFilter ||
+          (event.secondaryCategories ?? []).includes(categoryFilter)
+        );
+      });
 
       const filteredRestaurants = restaurants.filter(restaurant =>
         restaurant.name.toLowerCase().includes(searchLower) ||

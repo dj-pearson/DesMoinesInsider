@@ -13,6 +13,33 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 /**
+ * The categories Des Moines events actually fall into.
+ *
+ * Deliberately not a generic events taxonomy. Farmers markets, high school
+ * sports and free events each get their own category because they are how
+ * people here decide what to do, and none of them are visible in a list that
+ * stops at "Music, Food, Art, Outdoor, Family".
+ */
+export const EVENT_CATEGORIES = [
+  "Music",
+  "Food & Drink",
+  "Farmers Markets",
+  "Festivals",
+  "Arts & Theater",
+  "Sports",
+  "High School Sports",
+  "Family & Kids",
+  "Outdoor & Parks",
+  "Nightlife",
+  "Community & Civic",
+  "Fitness & Races",
+  "Holiday & Seasonal",
+  "Free",
+] as const;
+
+export type EventCategory = (typeof EVENT_CATEGORIES)[number];
+
+/**
  * The metro as locals actually describe it: named neighborhoods and districts
  * inside Des Moines, plus the surrounding suburbs people live in. Everything
  * else in the schema hangs off this so content can be browsed by place.
@@ -50,6 +77,9 @@ export const events = pgTable("events", {
   date: timestamp("date").notNull(),
   location: text("location").notNull(),
   category: text("category").notNull(),
+  // Up to two extra categories, so a free outdoor concert can be found under
+  // Music, Free and Outdoor & Parks without needing duplicate rows.
+  secondaryCategories: text("secondary_categories").array(),
   source: text("source").notNull(), // 'google' or 'catch-des-moines'
   sourceUrl: text("source_url"),
   imageUrl: text("image_url"),
@@ -142,11 +172,18 @@ export const restaurantOpenings = pgTable("restaurant_openings", {
 });
 
 // Insert schemas
-export const insertEventSchema = createInsertSchema(events).omit({
-  id: true,
-  createdAt: true,
-  slug: true,
-});
+export const insertEventSchema = createInsertSchema(events)
+  .omit({
+    id: true,
+    createdAt: true,
+    slug: true,
+  })
+  .extend({
+    // Anything reaching the database must already be one of our categories.
+    // Callers normalize scraped text with normalizeCategory() first.
+    category: z.enum(EVENT_CATEGORIES),
+    secondaryCategories: z.array(z.enum(EVENT_CATEGORIES)).max(2).optional().nullable(),
+  });
 
 export const insertRestaurantSchema = createInsertSchema(restaurants).omit({
   id: true,

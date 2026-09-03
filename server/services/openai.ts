@@ -1,4 +1,10 @@
 import OpenAI from "openai";
+import { EVENT_CATEGORIES } from "@shared/schema.js";
+import {
+  normalizeCategory,
+  normalizeSecondaryCategories,
+} from "@shared/categories.js";
+import type { EventCategory } from "@shared/schema.js";
 
 const openai = new OpenAI({ 
   apiKey: process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_ENV_VAR || "default_key"
@@ -85,5 +91,111 @@ Include 3-5 items per category. Only include real places that exist in Des Moine
   } catch (error) {
     console.error("Failed to generate local recommendations:", error);
     return { restaurants: [], attractions: [], playgrounds: [] };
+  }
+}
+
+
+export interface EnhancedEventContent {
+  description: string;
+  category: EventCategory;
+  secondaryCategories: EventCategory[];
+}
+
+/**
+ * Enhance an event's description and categorize it in a single call.
+ *
+ * One request rather than two: the model needs the same context for both jobs,
+ * and event ingestion runs over every scraped item on a schedule, so the saved
+ * call is real money.
+ *
+ * Every failure path falls back to the deterministic normalizer, so a missing
+ * API key or a rate limit degrades the copy rather than breaking ingestion.
+ */
+export async function enhanceAndCategorizeEvent(input: {
+  title: string;
+  description: string;
+  location: string;
+  venue?: string | null;
+  price?: string | null;
+  rawCategory?: string | null;
+}): Promise<EnhancedEventContent> {
+  const fallbackCategory = normalizeCategory(input.rawCategory, input.title);
+
+  const fallback: EnhancedEventContent = {
+    description: input.description,
+    category: fallbackCategory,
+    secondaryCategories: [],
+  };
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o", // the newest OpenAI model is "gpt-4o" which was released May 13, 2024. do not change this unless explicitly requested by the user
+      messages: [
+        {
+          role: "system",
+          content:
+            "You write for Des Moines Insider, a guide for people who live in the Des Moines metro. " +
+            "You write for residents, not tourists. Never invent details that are not in the input: " +
+            "no made-up prices, times, parking advice or lineups.",
+        },
+        {
+          role: "user",
+          content: `Rewrite this event description and categorize it.
+
+Title: ${input.title}
+Original description: ${input.description}
+Location: ${input.location}
+Venue: ${input.venue ?? "unknown"}
+Price: ${input.price ?? "unknown"}
+Source category: ${input.rawCategory ?? "unknown"}
+
+Rules for the description:
+- 2 to 3 sentences, written for a local
+- Only use facts present above
+- No marketing language and no "nestled in the heart of"
+
+Rules for the categories:
+- "category" must be exactly one of: ${EVENT_CATEGORIES.join(", ")}
+- "secondaryCategories" is 0 to 2 more from that same list, never repeating the primary
+- Use "Free" as a secondary category when the price is clearly free
+- Use "High School Sports" rather than "Sports" for high school events
+
+Respond as JSON: {"description": string, "category": string, "secondaryCategories": string[]}`,
+        },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 400,
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) return fallback;
+
+    const parsed = JSON.parse(content) as {
+      description?: unknown;
+      category?: unknown;
+      secondaryCategories?: unknown;
+    };
+
+    // Re-normalize whatever came back: the model is asked for exact values but
+    // is not trusted to have produced them.
+    const category = normalizeCategory(
+      typeof parsed.category === "string" ? parsed.category : null,
+      input.title,
+    );
+
+    return {
+      description:
+        typeof parsed.description === "string" && parsed.description.trim().length > 0
+          ? parsed.description.trim()
+          : input.description,
+      category,
+      secondaryCategories: normalizeSecondaryCategories(
+        parsed.secondaryCategories,
+        category,
+      ),
+    };
+  } catch (error) {
+    console.error(`Failed to enhance and categorize "${input.title}":`, error);
+    return fallback;
   }
 }

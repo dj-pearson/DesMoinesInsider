@@ -139,7 +139,8 @@ export function buildSeedEvents(): InsertEvent[] {
         "The Downtown Farmers' Market takes over the Historic Court District every Saturday morning from May through October, with hundreds of Iowa growers, bakers, and makers spread across several blocks. Come early if you want parking anywhere close, and bring cash for the stands that still prefer it.",
       date: daysFromNow(2, 7),
       location: "Historic Court District, Des Moines",
-      category: "Food",
+      category: "Farmers Markets",
+      secondaryCategories: ["Food & Drink", "Free"],
       source: "manual",
       sourceUrl:
         "https://www.desmoinesfarmersmarket.com/",
@@ -156,7 +157,8 @@ export function buildSeedEvents(): InsertEvent[] {
         "Free guided tours of the Iowa State Capitol run on the hour most weekdays and cover the law library, the rotunda, and the gold dome. It is one of the better free hours in the metro, and the hill outside is a good sledding spot once there is snow.",
       date: daysFromNow(3, 14),
       location: "East Side, Des Moines",
-      category: "Art",
+      category: "Community & Civic",
+      secondaryCategories: ["Free", "Family & Kids"],
       source: "manual",
       sourceUrl: "https://www.legis.iowa.gov/resources/tourGuide",
       imageUrl:
@@ -172,7 +174,8 @@ export function buildSeedEvents(): InsertEvent[] {
         "Admission to the Des Moines Art Center is always free, which makes it the reliable answer to a cold or rainy Saturday. The building itself is worth the trip, with wings by Eliel Saarinen, I. M. Pei, and Richard Meier, and there is a small cafe if you need to bribe anyone into staying longer.",
       date: daysFromNow(4, 11),
       location: "Greenwood Park, Des Moines",
-      category: "Art",
+      category: "Arts & Theater",
+      secondaryCategories: ["Free", "Family & Kids"],
       source: "manual",
       sourceUrl: "https://www.desmoinesartcenter.org/",
       imageUrl:
@@ -188,7 +191,8 @@ export function buildSeedEvents(): InsertEvent[] {
         "The loop around Gray's Lake is just under two miles on flat paved trail, which makes it stroller and scooter friendly. The Kruidenier Trail bridge is lit after dark and is the reason half the city's skyline photos exist.",
       date: daysFromNow(5, 9),
       location: "Gray's Lake Park, Des Moines",
-      category: "Outdoor",
+      category: "Outdoor & Parks",
+      secondaryCategories: ["Free", "Family & Kids"],
       source: "manual",
       sourceUrl:
         "https://www.dsm.city/departments/parks_and_recreation_division/places/grays_lake_park.php",
@@ -206,6 +210,7 @@ export function buildSeedEvents(): InsertEvent[] {
       date: daysFromNow(6, 19),
       location: "Historic Valley Junction, West Des Moines",
       category: "Music",
+      secondaryCategories: ["Free", "Festivals"],
       source: "manual",
       sourceUrl: "https://www.valleyjunction.com/events/",
       imageUrl:
@@ -221,7 +226,8 @@ export function buildSeedEvents(): InsertEvent[] {
         "The Science Center of Iowa is the standard rainy-day and deep-winter answer for families downtown. Hands-on exhibits run across three floors, the domed theater shows are included with admission, and it connects to the skywalk so you can get there without a coat.",
       date: daysFromNow(7, 10),
       location: "Western Gateway, Des Moines",
-      category: "Family",
+      category: "Family & Kids",
+      secondaryCategories: ["Arts & Theater"],
       source: "manual",
       sourceUrl: "https://www.sciowa.org/",
       imageUrl:

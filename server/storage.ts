@@ -24,8 +24,9 @@ import {
   type RestaurantOpening,
   type User,
 } from "@shared/schema";
-import { and, asc, desc, eq, gte, ilike, isNull, or, sql } from "drizzle-orm";
+import { and, arrayContains, asc, desc, eq, gte, ilike, isNull, or, sql } from "drizzle-orm";
 import { buildEventSlug, buildPlaceSlug, ensureUniqueSlug } from "@shared/slug";
+import { isEventCategory, normalizeCategory } from "@shared/categories";
 import { randomUUID } from "crypto";
 import { getDb, isDatabaseConfigured } from "./db";
 import {
@@ -114,6 +115,9 @@ export interface IStorage {
 
   /** Assign neighborhoods to rows that do not have one yet. */
   backfillNeighborhoods(): Promise<number>;
+
+  /** Rewrite legacy category values onto the current taxonomy. */
+  backfillCategories(): Promise<number>;
 }
 
 /** Filter sentinels the client sends when a dropdown is left on its default. */
@@ -216,7 +220,17 @@ export class DatabaseStorage implements IStorage {
     const conditions = [];
 
     if (filters?.category && filters.category !== ALL_CATEGORIES) {
-      conditions.push(ilike(events.category, `%${filters.category}%`));
+      // Match the primary category or either secondary one. "Free" is almost
+      // always a secondary label, so a primary-only match would make that
+      // filter look broken.
+      conditions.push(
+        isEventCategory(filters.category)
+          ? or(
+              eq(events.category, filters.category),
+              arrayContains(events.secondaryCategories, [filters.category]),
+            )
+          : ilike(events.category, `%${filters.category}%`),
+      );
     }
     // Prefer the neighborhood foreign key when we have it. Matching on the raw
     // location string misses everything whose text does not happen to name the
@@ -602,6 +616,22 @@ export class DatabaseStorage implements IStorage {
     console.log("Seeding complete.");
   }
 
+  async backfillCategories(): Promise<number> {
+    const rows = await this.db
+      .select({ id: events.id, title: events.title, category: events.category })
+      .from(events);
+
+    let updated = 0;
+    for (const row of rows) {
+      if (isEventCategory(row.category)) continue;
+      const category = normalizeCategory(row.category, row.title);
+      await this.db.update(events).set({ category }).where(eq(events.id, row.id));
+      updated += 1;
+    }
+
+    return updated;
+  }
+
   async backfillNeighborhoods(): Promise<number> {
     let filled = 0;
 
@@ -732,8 +762,12 @@ export class MemStorage implements IStorage {
 
     if (filters) {
       if (filters.category && filters.category !== ALL_CATEGORIES) {
-        results = results.filter((event) =>
-          event.category.toLowerCase().includes(filters.category!.toLowerCase()),
+        const wanted = filters.category;
+        results = results.filter(
+          (event) =>
+            event.category === wanted ||
+            (event.secondaryCategories ?? []).includes(wanted) ||
+            event.category.toLowerCase().includes(wanted.toLowerCase()),
         );
       }
       if (filters.neighborhood) {
@@ -798,6 +832,7 @@ export class MemStorage implements IStorage {
       venue: insertEvent.venue ?? null,
       price: insertEvent.price ?? null,
       isEnhanced: insertEvent.isEnhanced ?? false,
+      secondaryCategories: insertEvent.secondaryCategories ?? null,
       id,
       createdAt: new Date(),
     };
@@ -1093,6 +1128,21 @@ export class MemStorage implements IStorage {
     );
   }
 
+  async backfillCategories(): Promise<number> {
+    let updated = 0;
+
+    for (const [id, event] of Array.from(this.events.entries())) {
+      if (isEventCategory(event.category)) continue;
+      this.events.set(id, {
+        ...event,
+        category: normalizeCategory(event.category, event.title),
+      });
+      updated += 1;
+    }
+
+    return updated;
+  }
+
   async backfillNeighborhoods(): Promise<number> {
     let filled = 0;
 
@@ -1188,6 +1238,11 @@ export async function initializeStorage(): Promise<void> {
     const filledPlaces = await storage.backfillPlaceSlugs();
     if (filledPlaces > 0) {
       console.log(`[storage] Backfilled slugs for ${filledPlaces} place(s).`);
+    }
+
+    const recategorized = await storage.backfillCategories();
+    if (recategorized > 0) {
+      console.log(`[storage] Migrated ${recategorized} event(s) to the current categories.`);
     }
 
     const classified = await storage.backfillNeighborhoods();

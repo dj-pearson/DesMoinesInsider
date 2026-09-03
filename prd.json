@@ -210,7 +210,7 @@
         "Filter dropdowns in `EventFilters.tsx` and `SearchSection.tsx` render from the shared constant.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-007",

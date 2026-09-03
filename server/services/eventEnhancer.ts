@@ -1,55 +1,61 @@
-import { enhanceEventDescription } from './openai.js';
+import { enhanceAndCategorizeEvent } from './openai.js';
 import { ScrapedEvent } from './scraper.js';
 import { InsertEvent } from '@shared/schema.js';
+import { normalizeCategory } from '@shared/categories.js';
 
-export async function enhanceEvents(scrapedEvents: ScrapedEvent[], source: string): Promise<InsertEvent[]> {
+/**
+ * Turn scraped events into rows ready for the database.
+ *
+ * Categories are always normalized, whether or not the AI call succeeds, since
+ * the insert schema only accepts exact members of our category list.
+ */
+export async function enhanceEvents(
+  scrapedEvents: ScrapedEvent[],
+  source: string,
+): Promise<InsertEvent[]> {
   const enhancedEvents: InsertEvent[] = [];
 
   for (const event of scrapedEvents) {
-    try {
-      const enhancedDescription = await enhanceEventDescription(
-        event.title,
-        event.description,
-        event.location,
-        event.category
-      );
+    const base = {
+      title: event.title,
+      originalDescription: event.description,
+      date: event.date,
+      location: event.location,
+      source,
+      sourceUrl: event.sourceUrl,
+      imageUrl: event.imageUrl,
+      venue: event.venue,
+      price: event.price,
+    };
 
-      const enhancedEvent: InsertEvent = {
+    try {
+      const result = await enhanceAndCategorizeEvent({
         title: event.title,
-        originalDescription: event.description,
-        enhancedDescription,
-        date: event.date,
+        description: event.description,
         location: event.location,
-        category: event.category,
-        source,
-        sourceUrl: event.sourceUrl,
-        imageUrl: event.imageUrl,
         venue: event.venue,
         price: event.price,
-        isEnhanced: true,
-      };
+        rawCategory: event.category,
+      });
 
-      enhancedEvents.push(enhancedEvent);
+      enhancedEvents.push({
+        ...base,
+        enhancedDescription: result.description,
+        category: result.category,
+        secondaryCategories: result.secondaryCategories,
+        // Only claim AI enhancement when the copy actually changed.
+        isEnhanced: result.description !== event.description,
+      });
     } catch (error) {
       console.error(`Failed to enhance event: ${event.title}`, error);
-      
-      // Add unenhanced event as fallback
-      const fallbackEvent: InsertEvent = {
-        title: event.title,
-        originalDescription: event.description,
-        enhancedDescription: event.description,
-        date: event.date,
-        location: event.location,
-        category: event.category,
-        source,
-        sourceUrl: event.sourceUrl,
-        imageUrl: event.imageUrl,
-        venue: event.venue,
-        price: event.price,
-        isEnhanced: false,
-      };
 
-      enhancedEvents.push(fallbackEvent);
+      enhancedEvents.push({
+        ...base,
+        enhancedDescription: event.description,
+        category: normalizeCategory(event.category, event.title),
+        secondaryCategories: [],
+        isEnhanced: false,
+      });
     }
   }
 
