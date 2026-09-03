@@ -2,6 +2,7 @@ import {
   attractions,
   events,
   neighborhoods,
+  tentpoles,
   newsletterSubscriptions,
   playgrounds,
   restaurantOpenings,
@@ -18,6 +19,7 @@ import {
   type InsertRestaurantOpening,
   type InsertUser,
   type Neighborhood,
+  type Tentpole,
   type NewsletterSubscription,
   type Playground,
   type Restaurant,
@@ -50,6 +52,7 @@ import {
   type ClassifyInput,
 } from "./services/neighborhoodClassifier";
 import { seedNeighborhoods } from "./seed/neighborhoods";
+import { resolveNextOccurrence, seedTentpoles } from "./seed/tentpoles";
 import {
   buildSeedEvents,
   seedAttractions,
@@ -76,7 +79,19 @@ export interface NeighborhoodContent {
   playgrounds: Playground[];
 }
 
+/** A tentpole guide plus the scraped events that belong to it. */
+export interface TentpoleWithEvents {
+  tentpole: Tentpole;
+  neighborhood: Neighborhood | null;
+  relatedEvents: Event[];
+}
+
 export interface IStorage {
+  // Tentpoles
+  getTentpoles(): Promise<Tentpole[]>;
+  getUpcomingTentpoles(limit?: number): Promise<Tentpole[]>;
+  getTentpoleBySlug(slug: string): Promise<TentpoleWithEvents | undefined>;
+
   // Neighborhoods
   getNeighborhoods(): Promise<NeighborhoodWithCounts[]>;
   getNeighborhoodBySlug(slug: string): Promise<NeighborhoodWithCounts | undefined>;
@@ -192,6 +207,52 @@ export class DatabaseStorage implements IStorage {
     const slug = classifyNeighborhoodSlug(input);
     if (!slug) return null;
     return (await this.neighborhoodIds()).get(slug) ?? null;
+  }
+
+  // Tentpoles
+  async getTentpoles(): Promise<Tentpole[]> {
+    return this.db.select().from(tentpoles).orderBy(asc(tentpoles.nextStartDate));
+  }
+
+  async getUpcomingTentpoles(limit: number = 3): Promise<Tentpole[]> {
+    // Compare against the end date so something under way still counts as
+    // upcoming: the State Fair is very much "on" on its fifth day.
+    return this.db
+      .select()
+      .from(tentpoles)
+      .where(gte(tentpoles.nextEndDate, new Date()))
+      .orderBy(asc(tentpoles.nextStartDate))
+      .limit(limit);
+  }
+
+  async getTentpoleBySlug(slug: string): Promise<TentpoleWithEvents | undefined> {
+    const [tentpole] = await this.db
+      .select()
+      .from(tentpoles)
+      .where(eq(tentpoles.slug, slug))
+      .limit(1);
+
+    if (!tentpole) return undefined;
+
+    const [neighborhood] = tentpole.neighborhoodId
+      ? await this.db
+          .select()
+          .from(neighborhoods)
+          .where(eq(neighborhoods.id, tentpole.neighborhoodId))
+          .limit(1)
+      : [];
+
+    // Scraped events for the festival are matched by name. Titles vary
+    // ("Iowa State Fair 2027", "State Fair Parade"), so this is a contains
+    // match on the tentpole's name rather than an exact one.
+    const relatedEvents = await this.db
+      .select()
+      .from(events)
+      .where(and(ilike(events.title, `%${tentpole.name}%`), gte(events.date, new Date())))
+      .orderBy(asc(events.date))
+      .limit(20);
+
+    return { tentpole, neighborhood: neighborhood ?? null, relatedEvents };
   }
 
   // Neighborhoods
@@ -762,8 +823,52 @@ export class DatabaseStorage implements IStorage {
     this.neighborhoodIdCache = undefined;
   }
 
+  /**
+   * Tentpoles are reference data, and their dates are recomputed on every boot
+   * so a guide never shows an occurrence that has already finished.
+   */
+  private async seedTentpolesAndRefreshDates(): Promise<void> {
+    const ids = await this.neighborhoodIds();
+    const existing = await this.db
+      .select({ slug: tentpoles.slug })
+      .from(tentpoles);
+    const known = new Set(existing.map((row) => row.slug));
+
+    for (const seed of seedTentpoles) {
+      const { start, end } = resolveNextOccurrence(seed);
+      const neighborhoodId = seed.neighborhoodSlug
+        ? (ids.get(seed.neighborhoodSlug) ?? null)
+        : null;
+
+      if (known.has(seed.slug)) {
+        // Refresh only the dates; editorial fields may have been changed since.
+        await this.db
+          .update(tentpoles)
+          .set({ nextStartDate: start, nextEndDate: end })
+          .where(eq(tentpoles.slug, seed.slug));
+        continue;
+      }
+
+      await this.db.insert(tentpoles).values({
+        slug: seed.slug,
+        name: seed.name,
+        description: seed.description,
+        typicalMonth: seed.typicalMonth,
+        nextStartDate: start,
+        nextEndDate: end,
+        officialUrl: seed.officialUrl,
+        neighborhoodId,
+        insiderTips: seed.insiderTips,
+        whatsNewThisYear: seed.whatsNewThisYear ?? null,
+        isFree: seed.isFree,
+        isKidFriendly: seed.isKidFriendly,
+      });
+    }
+  }
+
   async seedIfEmpty(): Promise<void> {
     await this.seedNeighborhoodsIfEmpty();
+    await this.seedTentpolesAndRefreshDates();
 
     const [{ count } = { count: 0 }] = await this.db
       .select({ count: sql<number>`count(*)::int` })
@@ -943,6 +1048,45 @@ export class MemStorage implements IStorage {
   private users: Map<string, User> = new Map();
   private newsletterSubscriptions: Map<string, NewsletterSubscription> = new Map();
   private restaurantOpenings: Map<string, RestaurantOpening> = new Map();
+
+  private tentpoles: Map<string, Tentpole> = new Map();
+
+  // Tentpoles
+  async getTentpoles(): Promise<Tentpole[]> {
+    return Array.from(this.tentpoles.values()).sort(
+      (a, b) =>
+        (a.nextStartDate?.getTime() ?? 0) - (b.nextStartDate?.getTime() ?? 0),
+    );
+  }
+
+  async getUpcomingTentpoles(limit: number = 3): Promise<Tentpole[]> {
+    const now = new Date();
+    // End date, not start: something under way still counts as upcoming.
+    return (await this.getTentpoles())
+      .filter((t) => (t.nextEndDate ? t.nextEndDate >= now : false))
+      .slice(0, limit);
+  }
+
+  async getTentpoleBySlug(slug: string): Promise<TentpoleWithEvents | undefined> {
+    const tentpole = Array.from(this.tentpoles.values()).find((t) => t.slug === slug);
+    if (!tentpole) return undefined;
+
+    const neighborhood = tentpole.neighborhoodId
+      ? (this.neighborhoods.get(tentpole.neighborhoodId) ?? null)
+      : null;
+
+    const now = new Date();
+    const needle = tentpole.name.toLowerCase();
+    const relatedEvents = Array.from(this.events.values())
+      .filter(
+        (event) =>
+          event.title.toLowerCase().includes(needle) && new Date(event.date) >= now,
+      )
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      .slice(0, 20);
+
+    return { tentpole, neighborhood, relatedEvents };
+  }
 
   // Neighborhoods
   async getNeighborhoods(): Promise<NeighborhoodWithCounts[]> {
@@ -1405,6 +1549,34 @@ export class MemStorage implements IStorage {
           centerLat: neighborhood.centerLat ?? null,
           centerLng: neighborhood.centerLng ?? null,
           heroImageUrl: neighborhood.heroImageUrl ?? null,
+        });
+      }
+    }
+
+    if (this.tentpoles.size === 0) {
+      const bySlug = new Map(
+        Array.from(this.neighborhoods.values()).map((n) => [n.slug, n.id]),
+      );
+      for (const seed of seedTentpoles) {
+        const id = randomUUID();
+        const { start, end } = resolveNextOccurrence(seed);
+        this.tentpoles.set(id, {
+          id,
+          slug: seed.slug,
+          name: seed.name,
+          description: seed.description,
+          typicalMonth: seed.typicalMonth,
+          nextStartDate: start,
+          nextEndDate: end,
+          officialUrl: seed.officialUrl,
+          neighborhoodId: seed.neighborhoodSlug
+            ? (bySlug.get(seed.neighborhoodSlug) ?? null)
+            : null,
+          heroImageUrl: null,
+          insiderTips: seed.insiderTips,
+          whatsNewThisYear: seed.whatsNewThisYear ?? null,
+          isFree: seed.isFree,
+          isKidFriendly: seed.isKidFriendly,
         });
       }
     }

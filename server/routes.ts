@@ -89,6 +89,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return apiWriteLimiter(req, res, next);
   });
 
+  // Tentpole guide endpoints
+  app.get("/api/tentpoles", async (req, res) => {
+    try {
+      const upcomingOnly = req.query.upcoming === "true";
+      const limit = Number.parseInt(req.query.limit as string, 10);
+      res.json(
+        upcomingOnly
+          ? await storage.getUpcomingTentpoles(Number.isFinite(limit) ? limit : 3)
+          : await storage.getTentpoles(),
+      );
+    } catch (error) {
+      console.error("Failed to get tentpoles:", error);
+      res.status(500).json({ message: "Failed to fetch guides" });
+    }
+  });
+
+  app.get("/api/tentpoles/:slug", async (req, res) => {
+    try {
+      const guide = await storage.getTentpoleBySlug(req.params.slug);
+      if (!guide) {
+        return res.status(404).json({ message: "Guide not found" });
+      }
+      res.json(guide);
+    } catch (error) {
+      console.error("Failed to get tentpole:", error);
+      res.status(500).json({ message: "Failed to fetch guide" });
+    }
+  });
+
   // Neighborhoods endpoints
   app.get("/api/neighborhoods", async (_req, res) => {
     try {

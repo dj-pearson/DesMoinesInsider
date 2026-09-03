@@ -61,6 +61,35 @@ export const neighborhoods = pgTable("neighborhoods", {
 export const NEIGHBORHOOD_KINDS = ["district", "neighborhood", "suburb"] as const;
 export type NeighborhoodKind = (typeof NEIGHBORHOOD_KINDS)[number];
 
+/**
+ * The dozen or so events locals plan their year around.
+ *
+ * These are modelled separately from scraped events because they behave
+ * differently: they recur annually, people search for them by name months in
+ * advance, and what a reader wants is a guide rather than a calendar entry.
+ * Scraped events for the same festival still appear, linked from the guide.
+ */
+export const tentpoles = pgTable("tentpoles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  description: text("description"),
+  /** Human label for when it usually happens, e.g. "Mid-August". */
+  typicalMonth: text("typical_month"),
+  // Recomputed to the next occurrence each time the app boots, so a guide is
+  // never showing a date that has already passed.
+  nextStartDate: timestamp("next_start_date"),
+  nextEndDate: timestamp("next_end_date"),
+  officialUrl: text("official_url"),
+  neighborhoodId: varchar("neighborhood_id").references(() => neighborhoods.id),
+  heroImageUrl: text("hero_image_url"),
+  /** Array of { title, body }: the things a first-timer gets wrong. */
+  insiderTips: jsonb("insider_tips"),
+  whatsNewThisYear: text("whats_new_this_year"),
+  isFree: boolean("is_free"),
+  isKidFriendly: boolean("is_kid_friendly"),
+});
+
 export const events = pgTable("events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   // URL identity for the event's own page. Nullable at the database level so
@@ -237,8 +266,21 @@ export const insertNeighborhoodSchema = createInsertSchema(neighborhoods).omit({
   id: true,
 });
 
+export const insertTentpoleSchema = createInsertSchema(tentpoles).omit({
+  id: true,
+});
+
 // Types
 export type Neighborhood = typeof neighborhoods.$inferSelect;
+
+/** One practical tip on a tentpole guide. */
+export interface InsiderTip {
+  title: string;
+  body: string;
+}
+
+export type Tentpole = typeof tentpoles.$inferSelect;
+export type InsertTentpole = z.infer<typeof insertTentpoleSchema>;
 export type InsertNeighborhood = z.infer<typeof insertNeighborhoodSchema>;
 
 export type Event = typeof events.$inferSelect;

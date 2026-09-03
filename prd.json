@@ -305,7 +305,7 @@
         "The home page shows the next three upcoming tentpoles as a 'Coming Up' strip above Featured Events.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-011",

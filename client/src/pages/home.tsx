@@ -7,6 +7,7 @@ import EventFilters from "@/components/EventFilters";
 import Newsletter from "@/components/Newsletter";
 import Footer from "@/components/Footer";
 import { RestaurantOpenings } from "@/components/RestaurantOpenings";
+import ComingUp from "@/components/ComingUp";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { useSeo } from "@/lib/seo";
@@ -252,6 +253,7 @@ export default function Home() {
 
       {!showAllEvents && !searchResults && (
         <>
+          <ComingUp />
           <FeaturedEvents onViewAllEvents={handleViewAllEvents} />
           <MostSearched />
           

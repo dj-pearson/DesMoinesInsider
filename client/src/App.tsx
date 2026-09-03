@@ -10,6 +10,8 @@ import PlacePage from "@/pages/place";
 import NeighborhoodsPage from "@/pages/neighborhoods";
 import NeighborhoodPage from "@/pages/neighborhood";
 import ThisWeekendPage from "@/pages/this-weekend";
+import GuidesPage from "@/pages/guides";
+import GuidePage from "@/pages/guide";
 
 function Router() {
   return (
@@ -17,6 +19,8 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/events/:slug" component={EventPage} />
       <Route path="/this-weekend" component={ThisWeekendPage} />
+      <Route path="/guides" component={GuidesPage} />
+      <Route path="/guides/:slug" component={GuidePage} />
       <Route path="/neighborhoods" component={NeighborhoodsPage} />
       <Route path="/neighborhoods/:slug" component={NeighborhoodPage} />
       <Route path="/restaurants/:slug">{() => <PlacePage kind="restaurants" />}</Route>
