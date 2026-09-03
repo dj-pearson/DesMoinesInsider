@@ -5,6 +5,10 @@ import { z } from "zod";
 
 export const events = pgTable("events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // URL identity for the event's own page. Nullable at the database level so
+  // the column can be added to a table that already holds rows; application
+  // code always populates it on insert and backfills any gaps at boot.
+  slug: text("slug").unique(),
   title: text("title").notNull(),
   originalDescription: text("original_description"),
   enhancedDescription: text("enhanced_description"),
@@ -81,6 +85,7 @@ export const restaurantOpenings = pgTable("restaurant_openings", {
 export const insertEventSchema = createInsertSchema(events).omit({
   id: true,
   createdAt: true,
+  slug: true,
 });
 
 export const insertRestaurantSchema = createInsertSchema(restaurants).omit({

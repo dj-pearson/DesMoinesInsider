@@ -21,7 +21,8 @@ import {
   type RestaurantOpening,
   type User,
 } from "@shared/schema";
-import { and, asc, desc, eq, gte, ilike, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, isNull, or, sql } from "drizzle-orm";
+import { buildEventSlug, ensureUniqueSlug } from "@shared/slug";
 import { randomUUID } from "crypto";
 import { getDb, isDatabaseConfigured } from "./db";
 import {
@@ -35,6 +36,7 @@ export interface IStorage {
   // Events
   getEvents(filters?: { category?: string; date?: string; location?: string }): Promise<Event[]>;
   getEvent(id: string): Promise<Event | undefined>;
+  getEventBySlug(slug: string): Promise<Event | undefined>;
   createEvent(event: InsertEvent): Promise<Event>;
   createEvents(events: InsertEvent[]): Promise<Event[]>;
   getFeaturedEvents(limit?: number): Promise<Event[]>;
@@ -73,6 +75,9 @@ export interface IStorage {
 
   /** Populate baseline content if the store is empty. Safe to call repeatedly. */
   seedIfEmpty(): Promise<void>;
+
+  /** Give any event still missing a slug one. Safe to call repeatedly. */
+  backfillEventSlugs(): Promise<number>;
 }
 
 /** Filter sentinels the client sends when a dropdown is left on its default. */
@@ -118,14 +123,58 @@ export class DatabaseStorage implements IStorage {
     return event;
   }
 
+  async getEventBySlug(slug: string): Promise<Event | undefined> {
+    const [event] = await this.db
+      .select()
+      .from(events)
+      .where(eq(events.slug, slug))
+      .limit(1);
+    return event;
+  }
+
+  /** Every slug currently taken, used to resolve collisions before inserting. */
+  private async takenSlugs(): Promise<Set<string>> {
+    const rows = await this.db.select({ slug: events.slug }).from(events);
+    return new Set(rows.map((row) => row.slug).filter((slug): slug is string => Boolean(slug)));
+  }
+
   async createEvent(event: InsertEvent): Promise<Event> {
-    const [created] = await this.db.insert(events).values(event).returning();
+    const [created] = await this.createEvents([event]);
     return created;
   }
 
   async createEvents(newEvents: InsertEvent[]): Promise<Event[]> {
     if (newEvents.length === 0) return [];
-    return this.db.insert(events).values(newEvents).returning();
+
+    // Resolve collisions against both the stored slugs and the ones this batch
+    // is about to claim, so a batch containing two same-day duplicates of a
+    // title still produces two distinct URLs.
+    const taken = await this.takenSlugs();
+    const withSlugs = newEvents.map((event) => {
+      const slug = ensureUniqueSlug(buildEventSlug(event.title, event.date), taken);
+      taken.add(slug);
+      return { ...event, slug };
+    });
+
+    return this.db.insert(events).values(withSlugs).returning();
+  }
+
+  async backfillEventSlugs(): Promise<number> {
+    const missing = await this.db
+      .select({ id: events.id, title: events.title, date: events.date })
+      .from(events)
+      .where(or(isNull(events.slug), eq(events.slug, "")));
+
+    if (missing.length === 0) return 0;
+
+    const taken = await this.takenSlugs();
+    for (const event of missing) {
+      const slug = ensureUniqueSlug(buildEventSlug(event.title, event.date), taken);
+      taken.add(slug);
+      await this.db.update(events).set({ slug }).where(eq(events.id, event.id));
+    }
+
+    return missing.length;
   }
 
   async getFeaturedEvents(limit: number = 6): Promise<Event[]> {
@@ -344,10 +393,27 @@ export class MemStorage implements IStorage {
     return this.events.get(id);
   }
 
+  async getEventBySlug(slug: string): Promise<Event | undefined> {
+    return Array.from(this.events.values()).find((event) => event.slug === slug);
+  }
+
+  private takenSlugs(): Set<string> {
+    return new Set(
+      Array.from(this.events.values())
+        .map((event) => event.slug)
+        .filter((slug): slug is string => Boolean(slug)),
+    );
+  }
+
   async createEvent(insertEvent: InsertEvent): Promise<Event> {
     const id = randomUUID();
+    const slug = ensureUniqueSlug(
+      buildEventSlug(insertEvent.title, insertEvent.date),
+      this.takenSlugs(),
+    );
     const event: Event = {
       ...insertEvent,
+      slug,
       originalDescription: insertEvent.originalDescription ?? null,
       enhancedDescription: insertEvent.enhancedDescription ?? null,
       sourceUrl: insertEvent.sourceUrl ?? null,
@@ -564,6 +630,21 @@ export class MemStorage implements IStorage {
     for (const playground of seedPlaygrounds) await this.createPlayground(playground);
     for (const event of buildSeedEvents()) await this.createEvent(event);
   }
+
+  async backfillEventSlugs(): Promise<number> {
+    const taken = this.takenSlugs();
+    let filled = 0;
+
+    for (const [id, event] of Array.from(this.events.entries())) {
+      if (event.slug) continue;
+      const slug = ensureUniqueSlug(buildEventSlug(event.title, event.date), taken);
+      taken.add(slug);
+      this.events.set(id, { ...event, slug });
+      filled += 1;
+    }
+
+    return filled;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -598,7 +679,13 @@ export const storage: IStorage = createStorage();
 export async function initializeStorage(): Promise<void> {
   try {
     await storage.seedIfEmpty();
+
+    // Rows written before the slug column existed still need a URL.
+    const filled = await storage.backfillEventSlugs();
+    if (filled > 0) {
+      console.log(`[storage] Backfilled slugs for ${filled} event(s).`);
+    }
   } catch (error) {
-    console.error("Failed to seed storage:", error);
+    console.error("Failed to initialize storage:", error);
   }
 }

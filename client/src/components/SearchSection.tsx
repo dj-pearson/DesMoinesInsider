@@ -26,7 +26,7 @@ export default function SearchSection({ onSearch, isSearching = false }: SearchS
   return (
     <section className="bg-gradient-to-r from-primary to-blue-600 text-white py-20">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        <h2 className="text-4xl md:text-6xl font-bold mb-6">Discover Des Moines</h2>
+        <h1 className="text-4xl md:text-6xl font-bold mb-6">Discover Des Moines</h1>
         <p className="text-xl md:text-2xl mb-12 opacity-90">Your guide to the best events, restaurants, and attractions in the city</p>
         
         <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-6">

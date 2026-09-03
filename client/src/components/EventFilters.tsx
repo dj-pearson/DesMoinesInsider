@@ -8,11 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Event } from "@shared/schema";
 import { Calendar } from "lucide-react";
 
-interface EventFiltersProps {
-  onViewEventDetails: (event: Event) => void;
-}
-
-export default function EventFilters({ onViewEventDetails }: EventFiltersProps) {
+export default function EventFilters() {
   const [dateFilter, setDateFilter] = useState("All Dates");
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
   const [locationFilter, setLocationFilter] = useState("All Locations");
@@ -146,11 +142,7 @@ export default function EventFilters({ onViewEventDetails }: EventFiltersProps) 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {events && events.length > 0 ? (
               events.map((event) => (
-                <EventCard 
-                  key={event.id} 
-                  event={event} 
-                  onViewDetails={onViewEventDetails}
-                />
+                <EventCard key={event.id} event={event} />
               ))
             ) : (
               <div className="col-span-full text-center py-12 text-neutral-500">

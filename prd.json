@@ -144,7 +144,7 @@
         "Direct load of `/events/:slug` (hard refresh) works in production via the Express catch-all.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-004",
