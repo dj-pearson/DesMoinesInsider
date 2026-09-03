@@ -12,6 +12,7 @@ import {
   weekendDayFor,
 } from "@shared/weekend.js";
 import { requireAdmin } from "./middleware/auth.js";
+import { buildRobotsTxt, buildSitemap } from "./services/sitemap.js";
 import {
   createToken,
   sendConfirmationEmail,
@@ -94,6 +95,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return next();
     }
     return apiWriteLimiter(req, res, next);
+  });
+
+  // Crawler files. These sit outside /api because that is where crawlers look,
+  // and they are registered here so the SPA catch-all never swallows them.
+  app.get("/sitemap.xml", async (_req, res) => {
+    try {
+      res.type("application/xml").send(await buildSitemap());
+    } catch (error) {
+      console.error("Failed to build sitemap:", error);
+      res.status(500).type("text/plain").send("Could not build sitemap");
+    }
+  });
+
+  app.get("/robots.txt", (_req, res) => {
+    res.type("text/plain").send(buildRobotsTxt());
   });
 
   // Tentpole guide endpoints

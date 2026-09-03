@@ -397,7 +397,7 @@
         "A shared `useSeo()` hook or helper sets these consistently.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-015",

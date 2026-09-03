@@ -22,6 +22,13 @@ export interface SeoOptions {
 
 const SITE_NAME = "Des Moines Insider";
 
+/**
+ * Shown when a page has no image of its own. Social platforms fall back to
+ * whatever they can scrape without one, which is usually nothing useful, so a
+ * branded default is better than an empty card.
+ */
+const DEFAULT_OG_IMAGE = "/og-default.svg";
+
 /** Find an existing tag or create one, marking ours so cleanup is unambiguous. */
 function upsertMeta(selector: string, attributes: Record<string, string>): HTMLMetaElement {
   let tag = document.head.querySelector<HTMLMetaElement>(selector);
@@ -72,9 +79,14 @@ export function useSeo({
       content: SITE_NAME,
     });
     upsertMeta('meta[property="og:url"]', { property: "og:url", content: canonicalUrl });
+    const socialImage = new URL(
+      imageUrl ?? DEFAULT_OG_IMAGE,
+      window.location.origin,
+    ).toString();
+
     upsertMeta('meta[name="twitter:card"]', {
       name: "twitter:card",
-      content: imageUrl ? "summary_large_image" : "summary",
+      content: "summary_large_image",
     });
 
     if (description) {
@@ -85,9 +97,14 @@ export function useSeo({
       });
     }
 
-    if (imageUrl) {
-      upsertMeta('meta[property="og:image"]', { property: "og:image", content: imageUrl });
-    }
+    upsertMeta('meta[property="og:image"]', {
+      property: "og:image",
+      content: socialImage,
+    });
+    upsertMeta('meta[name="twitter:image"]', {
+      name: "twitter:image",
+      content: socialImage,
+    });
 
     upsertMeta('meta[name="robots"]', {
       name: "robots",
