@@ -1,7 +1,15 @@
+import { useSeo } from "@/lib/seo";
 import { Card, CardContent } from "@/components/ui/card";
 import { AlertCircle } from "lucide-react";
 
 export default function NotFound() {
+  // A 404 must never be indexed, or search engines accumulate dead entries.
+  useSeo({
+    title: "Page not found",
+    description: "That page does not exist on Des Moines Insider.",
+    noIndex: true,
+  });
+
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">
       <Card className="w-full max-w-md mx-4">

@@ -1,20 +1,224 @@
-import type { Express } from "express";
+import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage.js";
 import { scrapeAllSources, deduplicateEvents } from "./services/scraper.js";
+import { repairAggregatorLinks } from "./services/scrapers/linkRepair.js";
 import { enhanceEvents } from "./services/eventEnhancer.js";
-import { insertNewsletterSchema, insertRestaurantOpeningSchema } from "@shared/schema.js";
+import {
+  insertEventSubmissionSchema,
+  insertNewsletterSchema,
+  insertRestaurantOpeningSchema,
+  insertTipSchema,
+  loginSchema,
+  registerUserSchema,
+} from "@shared/schema.js";
 import cron from "node-cron";
+import {
+  getTonightRange,
+  getWeekendRange,
+  getZonedParts,
+  weekendDayFor,
+} from "@shared/weekend.js";
+import { requireAdmin } from "./middleware/auth.js";
+import { buildRobotsTxt, buildSitemap } from "./services/sitemap.js";
+import {
+  burnTimingBudget,
+  hashPassword,
+  requireUser,
+  toPublicUser,
+  verifyPassword,
+} from "./auth.js";
+import {
+  createToken,
+  sendConfirmationEmail,
+  sendTestIssue,
+  sendWeeklyIssue,
+} from "./services/newsletter.js";
+import {
+  apiWriteLimiter,
+  expensiveOperationLimiter,
+  newsletterLimiter,
+  submissionLimiter,
+  authLimiter,
+} from "./middleware/rateLimit.js";
+
+/**
+ * Scrape every configured source, deduplicate against what we already have,
+ * enhance the new events with AI, and persist the results.
+ *
+ * Shared by the admin endpoint and the cron schedule so the two paths can never
+ * drift apart.
+ */
+async function runComprehensiveScrape(): Promise<{
+  events: Awaited<ReturnType<typeof storage.createEvents>>;
+  restaurants: Awaited<ReturnType<typeof storage.createRestaurantOpenings>>;
+}> {
+  const startedAt = Date.now();
+  console.log("Starting comprehensive scraping from all sources...");
+
+  const existingEvents = await storage.getEvents();
+  const { events: newEvents, restaurants: newRestaurants, runs } = await scrapeAllSources();
+
+  // Recorded before anything else can fail. If enhancement or storage throws
+  // below, the run record is the only evidence of which sources were healthy.
+  await storage.recordScrapeRuns(
+    runs.map((run) => ({
+      source: run.source,
+      ok: run.ok,
+      eventCount: run.count,
+      durationMs: run.durationMs,
+      error: run.error,
+    })),
+  );
+
+  console.log(`Scraped ${newEvents.length} events from all sources`);
+  console.log(`Found ${newRestaurants.length} restaurant openings from news sources`);
+
+  // deduplicateEvents compares against the ScrapedEvent shape, so map stored
+  // rows into it before checking.
+  const existingScrapedEvents = existingEvents.map((e) => ({
+    title: e.title,
+    description: e.enhancedDescription || e.originalDescription || e.title,
+    date: e.date,
+    location: e.location,
+    category: e.category,
+    sourceUrl: e.sourceUrl || "",
+    imageUrl: e.imageUrl || undefined,
+    venue: e.venue || undefined,
+    price: e.price || undefined,
+  }));
+
+  const uniqueEvents = deduplicateEvents(existingScrapedEvents, newEvents);
+  console.log(`After deduplication: ${uniqueEvents.length} unique events to add`);
+
+  const enhancedEvents = await enhanceEvents(uniqueEvents, "comprehensive");
+
+  const [storedEvents, storedRestaurants] = await Promise.all([
+    storage.createEvents(enhancedEvents),
+    storage.createRestaurantOpenings(
+      newRestaurants.map((r) => ({
+        name: r.name,
+        description: r.description,
+        location: r.location,
+        cuisine: r.cuisine,
+        openingDate: r.openingDate,
+        status: r.status,
+        sourceUrl: r.sourceUrl,
+      })),
+    ),
+  ]);
+
+  // Repair links on events stored before the direct sources existed. Runs after
+  // storage so a failure here cannot cost us the scrape itself.
+  try {
+    await repairAggregatorLinks(storage);
+  } catch (error) {
+    console.error("Failed to repair aggregator links:", error);
+  }
+
+  const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(
+    `Scrape complete in ${seconds}s: stored ${storedEvents.length} events and ${storedRestaurants.length} restaurant openings`,
+  );
+
+  return { events: storedEvents, restaurants: storedRestaurants };
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Rate limit every state-changing API request per IP. Reads stay unmetered so
+  // ordinary browsing and crawling are unaffected.
+  app.use("/api", (req, res, next) => {
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+      return next();
+    }
+    return apiWriteLimiter(req, res, next);
+  });
+
+  // Crawler files. These sit outside /api because that is where crawlers look,
+  // and they are registered here so the SPA catch-all never swallows them.
+  app.get("/sitemap.xml", async (_req, res) => {
+    try {
+      res.type("application/xml").send(await buildSitemap());
+    } catch (error) {
+      console.error("Failed to build sitemap:", error);
+      res.status(500).type("text/plain").send("Could not build sitemap");
+    }
+  });
+
+  app.get("/robots.txt", (_req, res) => {
+    res.type("text/plain").send(buildRobotsTxt());
+  });
+
+  // Tentpole guide endpoints
+  app.get("/api/tentpoles", async (req, res) => {
+    try {
+      const upcomingOnly = req.query.upcoming === "true";
+      const limit = Number.parseInt(req.query.limit as string, 10);
+      res.json(
+        upcomingOnly
+          ? await storage.getUpcomingTentpoles(Number.isFinite(limit) ? limit : 3)
+          : await storage.getTentpoles(),
+      );
+    } catch (error) {
+      console.error("Failed to get tentpoles:", error);
+      res.status(500).json({ message: "Failed to fetch guides" });
+    }
+  });
+
+  app.get("/api/tentpoles/:slug", async (req, res) => {
+    try {
+      const guide = await storage.getTentpoleBySlug(req.params.slug);
+      if (!guide) {
+        return res.status(404).json({ message: "Guide not found" });
+      }
+      res.json(guide);
+    } catch (error) {
+      console.error("Failed to get tentpole:", error);
+      res.status(500).json({ message: "Failed to fetch guide" });
+    }
+  });
+
+  // Neighborhoods endpoints
+  app.get("/api/neighborhoods", async (_req, res) => {
+    try {
+      res.json(await storage.getNeighborhoods());
+    } catch (error) {
+      console.error("Failed to get neighborhoods:", error);
+      res.status(500).json({ message: "Failed to fetch neighborhoods" });
+    }
+  });
+
+  // Returns the neighborhood plus everything its landing page shows, so the
+  // page needs one request rather than five.
+  app.get("/api/neighborhoods/:slug", async (req, res) => {
+    try {
+      const content = await storage.getNeighborhoodContent(req.params.slug);
+      if (!content) {
+        return res.status(404).json({ message: "Neighborhood not found" });
+      }
+      res.json(content);
+    } catch (error) {
+      console.error("Failed to get neighborhood:", error);
+      res.status(500).json({ message: "Failed to fetch neighborhood" });
+    }
+  });
+
   // Events endpoints
   app.get("/api/events", async (req, res) => {
     try {
-      const { category, date, location } = req.query;
+      const { category, date, location, neighborhood } = req.query;
+      /** Only the literal string "true" enables a flag filter. */
+      const flag = (value: unknown) => value === "true";
+
       const filters = {
         category: category as string,
         date: date as string,
         location: location as string,
+        neighborhood: neighborhood as string,
+        free: flag(req.query.free),
+        kids: flag(req.query.kids),
+        indoor: flag(req.query.indoor),
+        skywalk: flag(req.query.skywalk),
       };
       
       const events = await storage.getEvents(filters);
@@ -36,6 +240,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Registered before /api/events/:id so the literal path segment is not read
+  // as an id. All windows are computed in Des Moines time, not the server's.
+  app.get("/api/events/this-weekend", async (_req, res) => {
+    try {
+      const now = new Date();
+      const weekend = getWeekendRange(now);
+      const tonight = getTonightRange(now);
+
+      const [weekendEvents, tonightEvents] = await Promise.all([
+        storage.getEventsBetween(weekend.start, weekend.end),
+        storage.getEventsBetween(tonight.start, tonight.end),
+      ]);
+
+      const days = weekend.days.map((day) => ({
+        label: day.label,
+        date: day.date,
+        events: weekendEvents.filter(
+          (event) => weekendDayFor(new Date(event.date), weekend)?.date === day.date,
+        ),
+      }));
+
+      res.json({
+        weekendInProgress: weekend.inProgress,
+        range: { start: weekend.start, end: weekend.end },
+        tonight: { range: tonight, events: tonightEvents },
+        days,
+      });
+    } catch (error) {
+      console.error("Failed to get this weekend:", error);
+      res.status(500).json({ message: "Failed to fetch this weekend" });
+    }
+  });
+
+  // Registered before /api/events/:id so the literal "slug" segment is never
+  // swallowed by the id route.
+  app.get("/api/events/slug/:slug", async (req, res) => {
+    try {
+      const event = await storage.getEventBySlug(req.params.slug);
+      if (!event) {
+        return res.status(404).json({ message: "Event not found" });
+      }
+      res.json(event);
+    } catch (error) {
+      console.error("Failed to get event by slug:", error);
+      res.status(500).json({ message: "Failed to fetch event" });
+    }
+  });
+
   app.get("/api/events/:id", async (req, res) => {
     try {
       const event = await storage.getEvent(req.params.id);
@@ -49,66 +301,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Comprehensive scraping endpoint for all sources
-  app.post("/api/events/scrape", async (req, res) => {
+  // Admin only: which sources are healthy. A source that has been returning
+  // zero events for a week is the failure mode that otherwise goes unnoticed.
+  app.get("/api/admin/scrape-runs", requireAdmin, async (req, res) => {
     try {
-      console.log("Starting comprehensive scraping from all sources...");
-      
-      // Get existing events for deduplication
-      const existingEvents = await storage.getEvents();
-      
-      // Scrape from all sources
-      const { events: newEvents, restaurants: newRestaurants } = await scrapeAllSources();
-      
-      console.log(`Scraped ${newEvents.length} new events from all sources`);
-      console.log(`Found ${newRestaurants.length} restaurant openings from news sources`);
-
-      // Deduplicate events against existing ones - map existing events to match ScrapedEvent interface
-      const existingScrapedEvents = existingEvents.map(e => ({
-        title: e.title,
-        description: e.enhancedDescription || e.originalDescription || e.title,
-        date: e.date,
-        location: e.location,
-        category: e.category,
-        sourceUrl: e.sourceUrl || '',
-        imageUrl: e.imageUrl || undefined,
-        venue: e.venue || undefined,
-        price: e.price || undefined
-      }));
-      const uniqueEvents = deduplicateEvents(existingScrapedEvents, newEvents);
-      console.log(`After deduplication: ${uniqueEvents.length} unique events to add`);
-
-      // Enhance events with AI
-      const enhancedEvents = await enhanceEvents(uniqueEvents, 'comprehensive');
-
-      // Store enhanced events and restaurant openings
-      const [storedEvents, storedRestaurants] = await Promise.all([
-        storage.createEvents(enhancedEvents),
-        storage.createRestaurantOpenings(newRestaurants.map(r => ({
-          name: r.name,
-          description: r.description,
-          location: r.location,
-          cuisine: r.cuisine,
-          openingDate: r.openingDate,
-          status: r.status,
-          sourceUrl: r.sourceUrl
-        })))
-      ]);
-
-      console.log(`Enhanced and stored ${storedEvents.length} events`);
-      console.log(`Stored ${storedRestaurants.length} restaurant openings`);
-      
-      res.json({
-        message: `Successfully scraped and enhanced ${storedEvents.length} events and ${storedRestaurants.length} restaurant openings`,
-        events: storedEvents,
-        restaurants: storedRestaurants
-      });
+      const limit = Math.min(Number(req.query.limit) || 50, 200);
+      res.json(await storage.getRecentScrapeRuns(limit));
     } catch (error) {
-      console.error("Failed to comprehensively scrape:", error);
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      res.status(500).json({ message: "Failed to scrape: " + errorMessage });
+      console.error("Failed to load scrape runs:", error);
+      res.status(500).json({ message: "Could not load scrape history" });
     }
   });
+
+  // Comprehensive scraping endpoint for all sources.
+  // Admin only: this drives a headless browser across a dozen sites and spends
+  // OpenAI credits, so it must never be reachable anonymously.
+  app.post(
+    "/api/events/scrape",
+    requireAdmin,
+    expensiveOperationLimiter,
+    async (_req, res) => {
+      try {
+        const { events: storedEvents, restaurants: storedRestaurants } =
+          await runComprehensiveScrape();
+
+        res.json({
+          message: `Successfully scraped and enhanced ${storedEvents.length} events and ${storedRestaurants.length} restaurant openings`,
+          events: storedEvents,
+          restaurants: storedRestaurants,
+        });
+      } catch (error) {
+        console.error("Failed to comprehensively scrape:", error);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        res.status(500).json({ message: "Failed to scrape: " + errorMessage });
+      }
+    },
+  );
 
   // Restaurants endpoints
   app.get("/api/restaurants", async (req, res) => {
@@ -118,6 +346,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to get restaurants:", error);
       res.status(500).json({ message: "Failed to fetch restaurants" });
+    }
+  });
+
+  // Registered alongside /top so neither literal segment is read as a slug.
+  app.get("/api/restaurants/slug/:slug", async (req, res) => {
+    try {
+      const record = await storage.getRestaurantBySlug(req.params.slug);
+      if (!record) {
+        return res.status(404).json({ message: "Restaurant not found" });
+      }
+      res.json(record);
+    } catch (error) {
+      console.error("Failed to get restaurant by slug:", error);
+      res.status(500).json({ message: "Failed to fetch restaurant" });
     }
   });
 
@@ -153,6 +395,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Registered alongside /top so neither literal segment is read as a slug.
+  app.get("/api/attractions/slug/:slug", async (req, res) => {
+    try {
+      const record = await storage.getAttractionBySlug(req.params.slug);
+      if (!record) {
+        return res.status(404).json({ message: "Attraction not found" });
+      }
+      res.json(record);
+    } catch (error) {
+      console.error("Failed to get attraction by slug:", error);
+      res.status(500).json({ message: "Failed to fetch attraction" });
+    }
+  });
+
   app.get("/api/attractions/top", async (req, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 5;
@@ -185,6 +441,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Registered alongside /top so neither literal segment is read as a slug.
+  app.get("/api/playgrounds/slug/:slug", async (req, res) => {
+    try {
+      const record = await storage.getPlaygroundBySlug(req.params.slug);
+      if (!record) {
+        return res.status(404).json({ message: "Playground not found" });
+      }
+      res.json(record);
+    } catch (error) {
+      console.error("Failed to get playground by slug:", error);
+      res.status(500).json({ message: "Failed to fetch playground" });
+    }
+  });
+
   app.get("/api/playgrounds/top", async (req, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 5;
@@ -206,6 +476,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Everything the family hub needs, in one request: kid-friendly free events
+  // for the coming weekend plus the curated destinations grouped by kind.
+  app.get("/api/family", async (_req, res) => {
+    try {
+      const now = new Date();
+      const weekend = getWeekendRange(now);
+
+      const [weekendEvents, places, neighborhoods] = await Promise.all([
+        storage.getEventsBetween(weekend.start, weekend.end),
+        storage.getPlaygrounds(),
+        storage.getNeighborhoods(),
+      ]);
+
+      // Both flags must be positively true. An event with unknown
+      // kid-friendliness is not something to send a family to.
+      const freeThisWeekend = weekendEvents.filter(
+        (event) => event.isFree === true && event.isKidFriendly === true,
+      );
+
+      res.json({
+        // The Des Moines month, so the seasonal sections do not flip a day
+        // early or late for a server running elsewhere.
+        month: getZonedParts(now).month,
+        freeThisWeekend,
+        places,
+        neighborhoods,
+      });
+    } catch (error) {
+      console.error("Failed to build family hub:", error);
+      res.status(500).json({ message: "Failed to fetch family content" });
+    }
+  });
+
   // Restaurant Openings endpoints
   app.get("/api/restaurant-openings", async (req, res) => {
     try {
@@ -217,7 +520,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/restaurant-openings", async (req, res) => {
+  // Admin only: this inserts arbitrary content that renders on the public site.
+  app.get("/api/restaurant-openings/slug/:slug", async (req, res) => {
+    try {
+      const opening = await storage.getRestaurantOpeningBySlug(req.params.slug);
+      if (!opening) {
+        return res.status(404).json({ message: "Not found" });
+      }
+      res.json(opening);
+    } catch (error) {
+      console.error("Failed to get restaurant opening:", error);
+      res.status(500).json({ message: "Failed to fetch" });
+    }
+  });
+
+  app.post("/api/restaurant-openings", requireAdmin, async (req, res) => {
     try {
       const result = insertRestaurantOpeningSchema.safeParse(req.body);
       if (!result.success) {
@@ -232,29 +549,386 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Newsletter endpoint
-  app.post("/api/newsletter/subscribe", async (req, res) => {
+  // Authentication
+  app.post("/api/auth/register", authLimiter, async (req, res) => {
+    try {
+      const result = registerUserSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({
+          message: "Please check the form",
+          issues: result.error.issues.map((issue) => ({
+            field: issue.path.join("."),
+            message: issue.message,
+          })),
+        });
+      }
+
+      // Stored lower-case so "Dana" and "dana" cannot both be registered.
+      const username = result.data.username.toLowerCase();
+      const email = result.data.email.toLowerCase();
+
+      const existing = await storage.getUserByUsernameOrEmail(username);
+      const existingEmail = await storage.getUserByUsernameOrEmail(email);
+      if (existing || existingEmail) {
+        return res.status(409).json({ message: "That username or email is taken" });
+      }
+
+      const user = await storage.createUser({
+        username,
+        email,
+        passwordHash: await hashPassword(result.data.password),
+        homeNeighborhoodId: result.data.homeNeighborhoodId ?? null,
+      });
+
+      // Regenerate before attaching identity so a pre-login session id cannot
+      // be reused by whoever set it (session fixation).
+      req.session.regenerate((error) => {
+        if (error) {
+          console.error("Failed to regenerate session:", error);
+          return res.status(500).json({ message: "Could not sign you in" });
+        }
+        req.session.userId = user.id;
+        res.json({ user: toPublicUser(user) });
+      });
+    } catch (error) {
+      console.error("Failed to register:", error);
+      res.status(500).json({ message: "Could not create your account" });
+    }
+  });
+
+  app.post("/api/auth/login", authLimiter, async (req, res) => {
+    try {
+      const result = loginSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ message: "Enter a username and password" });
+      }
+
+      const user = await storage.getUserByUsernameOrEmail(result.data.username);
+
+      // Same message and similar timing whether the account exists or the
+      // password is wrong, so neither can be used to enumerate accounts.
+      if (!user) {
+        await burnTimingBudget(result.data.password);
+        return res.status(401).json({ message: "Those details do not match" });
+      }
+
+      if (!(await verifyPassword(result.data.password, user.passwordHash))) {
+        return res.status(401).json({ message: "Those details do not match" });
+      }
+
+      req.session.regenerate((error) => {
+        if (error) {
+          console.error("Failed to regenerate session:", error);
+          return res.status(500).json({ message: "Could not sign you in" });
+        }
+        req.session.userId = user.id;
+        res.json({ user: toPublicUser(user) });
+      });
+    } catch (error) {
+      console.error("Failed to log in:", error);
+      res.status(500).json({ message: "Could not sign you in" });
+    }
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    req.session.destroy((error) => {
+      if (error) console.error("Failed to destroy session:", error);
+      res.clearCookie("dsm.sid");
+      res.json({ message: "Signed out" });
+    });
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    if (!req.session?.userId) return res.json({ user: null });
+    try {
+      const user = await storage.getUser(req.session.userId);
+      res.json({ user: user ? toPublicUser(user) : null });
+    } catch (error) {
+      console.error("Failed to load session user:", error);
+      res.status(500).json({ message: "Could not load your account" });
+    }
+  });
+
+  app.patch("/api/me", requireUser, async (req, res) => {
+    try {
+      const raw = req.body?.homeNeighborhoodId;
+      const neighborhoodId = typeof raw === "string" && raw ? raw : null;
+      const user = await storage.setHomeNeighborhood(req.session.userId!, neighborhoodId);
+      res.json({ user });
+    } catch (error) {
+      console.error("Failed to update account:", error);
+      res.status(500).json({ message: "Could not update your account" });
+    }
+  });
+
+  // Saved events
+  app.get("/api/me/saved", requireUser, async (req, res) => {
+    try {
+      res.json(await storage.getSavedEvents(req.session.userId!));
+    } catch (error) {
+      console.error("Failed to load saved events:", error);
+      res.status(500).json({ message: "Could not load your saved events" });
+    }
+  });
+
+  app.post("/api/events/:id/save", requireUser, async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.id);
+      if (!event) return res.status(404).json({ message: "Event not found" });
+      await storage.saveEvent(req.session.userId!, req.params.id);
+      res.json({ saved: true });
+    } catch (error) {
+      console.error("Failed to save event:", error);
+      res.status(500).json({ message: "Could not save that event" });
+    }
+  });
+
+  app.delete("/api/events/:id/save", requireUser, async (req, res) => {
+    try {
+      await storage.unsaveEvent(req.session.userId!, req.params.id);
+      res.json({ saved: false });
+    } catch (error) {
+      console.error("Failed to unsave event:", error);
+      res.status(500).json({ message: "Could not remove that event" });
+    }
+  });
+
+  // Resident tips
+  app.get("/api/tips/:targetType/:targetId", async (req, res) => {
+    try {
+      res.json(await storage.getTips(req.params.targetType, req.params.targetId));
+    } catch (error) {
+      console.error("Failed to load tips:", error);
+      res.status(500).json({ message: "Could not load tips" });
+    }
+  });
+
+  app.post("/api/tips", requireUser, submissionLimiter, async (req, res) => {
+    try {
+      const result = insertTipSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({
+          message: "Please check your tip",
+          issues: result.error.issues.map((issue) => ({
+            field: issue.path.join("."),
+            message: issue.message,
+          })),
+        });
+      }
+
+      const existing = await storage.getUserTipFor(
+        req.session.userId!,
+        result.data.targetType,
+        result.data.targetId,
+      );
+      if (existing) {
+        return res.status(409).json({ message: "You have already left a tip here" });
+      }
+
+      await storage.createTip(req.session.userId!, result.data);
+      res.json({ message: "Thanks" });
+    } catch (error) {
+      console.error("Failed to create tip:", error);
+      res.status(500).json({ message: "Could not save your tip" });
+    }
+  });
+
+  // Admin only: hide a tip without deleting it, so moderation is reversible.
+  app.post("/api/tips/:id/hide", requireAdmin, async (req, res) => {
+    try {
+      const tip = await storage.setTipStatus(req.params.id, "hidden");
+      if (!tip) return res.status(404).json({ message: "Not found" });
+      res.json({ message: "Hidden" });
+    } catch (error) {
+      console.error("Failed to hide tip:", error);
+      res.status(500).json({ message: "Could not hide that tip" });
+    }
+  });
+
+  app.post("/api/tips/:id/show", requireAdmin, async (req, res) => {
+    try {
+      const tip = await storage.setTipStatus(req.params.id, "visible");
+      if (!tip) return res.status(404).json({ message: "Not found" });
+      res.json({ message: "Visible" });
+    } catch (error) {
+      console.error("Failed to show tip:", error);
+      res.status(500).json({ message: "Could not restore that tip" });
+    }
+  });
+
+  // Community submissions
+  app.post("/api/submissions", submissionLimiter, async (req, res) => {
+    try {
+      // Honeypot: a field hidden from people but filled in by naive bots.
+      // Answer 200 so a bot cannot tell it was caught and retry differently.
+      if (typeof req.body?.website === "string" && req.body.website.trim() !== "") {
+        console.warn("[submissions] Honeypot triggered; discarding.");
+        return res.json({ message: "Thanks. We will take a look." });
+      }
+
+      const result = insertEventSubmissionSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({
+          message: "Please check the form",
+          issues: result.error.issues.map((issue) => ({
+            field: issue.path.join("."),
+            message: issue.message,
+          })),
+        });
+      }
+
+      // Nothing here is published. A reviewer decides.
+      await storage.createSubmission(result.data);
+      res.json({ message: "Thanks. We will take a look." });
+    } catch (error) {
+      console.error("Failed to record submission:", error);
+      res.status(500).json({ message: "Could not record your submission" });
+    }
+  });
+
+  app.get("/api/submissions", requireAdmin, async (req, res) => {
+    try {
+      const status = typeof req.query.status === "string" ? req.query.status : undefined;
+      res.json(await storage.getSubmissions(status));
+    } catch (error) {
+      console.error("Failed to list submissions:", error);
+      res.status(500).json({ message: "Could not list submissions" });
+    }
+  });
+
+  app.post("/api/submissions/:id/approve", requireAdmin, async (req, res) => {
+    try {
+      const submission = await storage.getSubmission(req.params.id);
+      if (!submission) return res.status(404).json({ message: "Not found" });
+      if (submission.status !== "pending") {
+        return res.status(409).json({ message: `Already ${submission.status}` });
+      }
+
+      // Approved submissions go through the same enhancement path as scraped
+      // events, so they get the same categories, flags and venue linking.
+      const [enhanced] = await enhanceEvents(
+        [
+          {
+            title: submission.title,
+            description: submission.description,
+            date: submission.date,
+            location: submission.location,
+            category: submission.category,
+            sourceUrl: submission.sourceUrl ?? "",
+            imageUrl: submission.imageUrl ?? undefined,
+            venue: submission.venue ?? undefined,
+            price: submission.price ?? undefined,
+          },
+        ],
+        "community",
+      );
+
+      const [published] = await storage.createEvents([enhanced]);
+      await storage.markSubmissionReviewed(submission.id, "approved", published.id);
+
+      res.json({ message: "Published", event: published });
+    } catch (error) {
+      console.error("Failed to approve submission:", error);
+      res.status(500).json({ message: "Could not approve submission" });
+    }
+  });
+
+  app.post("/api/submissions/:id/reject", requireAdmin, async (req, res) => {
+    try {
+      const submission = await storage.markSubmissionReviewed(req.params.id, "rejected");
+      if (!submission) return res.status(404).json({ message: "Not found" });
+      res.json({ message: "Rejected" });
+    } catch (error) {
+      console.error("Failed to reject submission:", error);
+      res.status(500).json({ message: "Could not reject submission" });
+    }
+  });
+
+  // Newsletter endpoints
+  app.post("/api/newsletter/subscribe", newsletterLimiter, async (req, res) => {
     try {
       const result = insertNewsletterSchema.safeParse(req.body);
       if (!result.success) {
         return res.status(400).json({ message: "Invalid email format" });
       }
 
-      const subscription = await storage.subscribeNewsletter(result.data);
-      res.json({ 
-        message: "Successfully subscribed to newsletter",
-        subscription: { email: subscription.email }
+      const token = createToken();
+      const subscription = await storage.subscribeNewsletter(result.data, token);
+
+      // Double opt-in: nothing is sent to this address until the link is
+      // clicked, so a typo or a malicious signup cannot subscribe someone else.
+      await sendConfirmationEmail(subscription);
+
+      res.json({
+        message: "Check your email to confirm your subscription",
+        subscription: { email: subscription.email },
       });
     } catch (error) {
       console.error("Failed to subscribe to newsletter:", error);
-      const errorMessage = error instanceof Error ? error.message : "";
-      if (errorMessage?.includes('unique')) {
-        res.status(400).json({ message: "Email already subscribed" });
-      } else {
-        res.status(500).json({ message: "Failed to subscribe to newsletter" });
-      }
+      res.status(500).json({ message: "Failed to subscribe to newsletter" });
     }
   });
+
+  app.get("/api/newsletter/confirm", async (req, res) => {
+    const token = typeof req.query.token === "string" ? req.query.token : "";
+    if (!token) return res.status(400).send("Missing token");
+
+    try {
+      const subscription = await storage.confirmSubscription(token);
+      if (!subscription) {
+        return res.status(404).send("That confirmation link is not valid.");
+      }
+      // Clicked from an email client, so answer with a page rather than JSON.
+      res.redirect("/?subscribed=1");
+    } catch (error) {
+      console.error("Failed to confirm subscription:", error);
+      res.status(500).send("Could not confirm your subscription.");
+    }
+  });
+
+  /** Both GET and POST: mail clients use POST for one-click unsubscribe. */
+  const handleUnsubscribe = async (req: Request, res: Response) => {
+    const token =
+      (typeof req.query.token === "string" && req.query.token) ||
+      (typeof req.body?.token === "string" && req.body.token) ||
+      "";
+    if (!token) return res.status(400).send("Missing token");
+
+    try {
+      const subscription = await storage.unsubscribe(token);
+      if (!subscription) {
+        return res.status(404).send("That unsubscribe link is not valid.");
+      }
+      res.send(
+        "You have been unsubscribed from Des Moines Insider. Nothing further will be sent.",
+      );
+    } catch (error) {
+      console.error("Failed to unsubscribe:", error);
+      res.status(500).send("Could not unsubscribe.");
+    }
+  };
+
+  app.get("/api/newsletter/unsubscribe", handleUnsubscribe);
+  app.post("/api/newsletter/unsubscribe", handleUnsubscribe);
+
+  // Admin only: sends the current issue to one address for a look before the
+  // Thursday run.
+  app.post(
+    "/api/newsletter/send-test",
+    requireAdmin,
+    expensiveOperationLimiter,
+    async (req, res) => {
+      const to = typeof req.body?.email === "string" ? req.body.email : "";
+      if (!to) return res.status(400).json({ message: "An email address is required" });
+
+      try {
+        res.json(await sendTestIssue(to));
+      } catch (error) {
+        console.error("Failed to send test issue:", error);
+        res.status(500).json({ message: "Failed to send test issue" });
+      }
+    },
+  );
 
   // Search endpoint
   app.get("/api/search", async (req, res) => {
@@ -276,11 +950,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const searchLower = query.toLowerCase();
       
-      const filteredEvents = events.filter(event => 
-        event.title.toLowerCase().includes(searchLower) ||
-        event.enhancedDescription?.toLowerCase().includes(searchLower) ||
-        event.location.toLowerCase().includes(searchLower)
-      );
+      const categoryFilter =
+        typeof category === "string" && category && category !== "All Categories"
+          ? category
+          : undefined;
+
+      const filteredEvents = events.filter((event) => {
+        const matchesText =
+          event.title.toLowerCase().includes(searchLower) ||
+          event.enhancedDescription?.toLowerCase().includes(searchLower) ||
+          event.location.toLowerCase().includes(searchLower);
+        if (!matchesText) return false;
+
+        // The dropdown lists event categories, so it narrows events only. A
+        // secondary category counts: a free outdoor concert should appear
+        // under Free as well as under Music.
+        if (!categoryFilter) return true;
+        return (
+          event.category === categoryFilter ||
+          (event.secondaryCategories ?? []).includes(categoryFilter)
+        );
+      });
 
       const filteredRestaurants = restaurants.filter(restaurant =>
         restaurant.name.toLowerCase().includes(searchLower) ||
@@ -309,52 +999,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Schedule automatic comprehensive scraping every 6 hours
-  cron.schedule('0 */6 * * *', async () => {
-    console.log('Running scheduled comprehensive scraping...');
+  // Scheduled scraping every 6 hours. Uses the same code path as the admin
+  // endpoint so behaviour cannot drift between them.
+  cron.schedule("0 */6 * * *", async () => {
+    console.log("Running scheduled comprehensive scraping...");
     try {
-      // Get existing events for deduplication
-      const existingEvents = await storage.getEvents();
-      
-      // Scrape from all sources
-      const { events: newEvents, restaurants: newRestaurants } = await scrapeAllSources();
-      
-      // Deduplicate events against existing ones
-      const existingScrapedEvents = existingEvents.map(e => ({
-        title: e.title,
-        description: e.enhancedDescription || e.originalDescription || e.title,
-        date: e.date,
-        location: e.location,
-        category: e.category,
-        sourceUrl: e.sourceUrl || '',
-        imageUrl: e.imageUrl || undefined,
-        venue: e.venue || undefined,
-        price: e.price || undefined
-      }));
-      const uniqueEvents = deduplicateEvents(existingScrapedEvents, newEvents);
-
-      // Enhance events with AI
-      const enhancedEvents = await enhanceEvents(uniqueEvents, 'comprehensive');
-
-      // Store enhanced events and restaurant openings
-      const [storedEvents, storedRestaurants] = await Promise.all([
-        storage.createEvents(enhancedEvents),
-        storage.createRestaurantOpenings(newRestaurants.map(r => ({
-          name: r.name,
-          description: r.description,
-          location: r.location,
-          cuisine: r.cuisine,
-          openingDate: r.openingDate,
-          status: r.status,
-          sourceUrl: r.sourceUrl
-        })))
-      ]);
-      
-      console.log(`Scheduled scraping completed: ${storedEvents.length} events and ${storedRestaurants.length} restaurant openings processed`);
+      const { events, restaurants } = await runComprehensiveScrape();
+      console.log(
+        `Scheduled scraping completed: ${events.length} events and ${restaurants.length} restaurant openings processed`,
+      );
     } catch (error) {
-      console.error('Scheduled comprehensive scraping failed:', error);
+      console.error("Scheduled comprehensive scraping failed:", error);
     }
   });
+
+  // Thursday at 4pm Des Moines time: late enough that weekend plans are being
+  // made, early enough to still influence them.
+  cron.schedule(
+    "0 16 * * 4",
+    async () => {
+      console.log("Sending the weekly newsletter...");
+      try {
+        const report = await sendWeeklyIssue();
+        console.log(
+          report.skipped
+            ? `Newsletter skipped: ${report.skipped}`
+            : `Newsletter sent to ${report.sent} of ${report.attempted} subscriber(s)`,
+        );
+      } catch (error) {
+        console.error("Weekly newsletter send failed:", error);
+      }
+    },
+    { timezone: "America/Chicago" },
+  );
 
   const httpServer = createServer(app);
   return httpServer;

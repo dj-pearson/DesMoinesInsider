@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Des Moines Insider">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1d4ed8"/>
+      <stop offset="100%" stop-color="#1e3a8a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <text x="80" y="290" font-family="Helvetica,Arial,sans-serif" font-size="86" font-weight="700" fill="#ffffff">Des Moines Insider</text>
+  <text x="80" y="368" font-family="Helvetica,Arial,sans-serif" font-size="38" fill="#bfdbfe">Events, openings and things to do</text>
+  <text x="80" y="424" font-family="Helvetica,Arial,sans-serif" font-size="38" fill="#bfdbfe">written for people who live here</text>
+  <rect x="80" y="470" width="120" height="6" rx="3" fill="#60a5fa"/>
+</svg>

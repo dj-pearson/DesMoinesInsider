@@ -1,8 +1,9 @@
+import { EVENT_CATEGORIES } from "@shared/schema";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2 } from "lucide-react";
+import { Loader2, CalendarDays } from "lucide-react";
 
 interface SearchSectionProps {
   onSearch: (query: string, category: string) => void;
@@ -26,8 +27,17 @@ export default function SearchSection({ onSearch, isSearching = false }: SearchS
   return (
     <section className="bg-gradient-to-r from-primary to-blue-600 text-white py-20">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        <h2 className="text-4xl md:text-6xl font-bold mb-6">Discover Des Moines</h2>
-        <p className="text-xl md:text-2xl mb-12 opacity-90">Your guide to the best events, restaurants, and attractions in the city</p>
+        <h1 className="text-4xl md:text-6xl font-bold mb-6">Discover Des Moines</h1>
+        <p className="text-xl md:text-2xl mb-8 opacity-90">Your guide to the best events, restaurants, and attractions in the city</p>
+
+        {/* The question most visitors arrive with, answered in one click. */}
+        <a
+          href="/this-weekend"
+          className="inline-flex items-center gap-2 mb-12 bg-white text-primary font-semibold px-6 py-3 rounded-lg hover:bg-neutral-100 transition-colors"
+        >
+          <CalendarDays className="h-5 w-5" />
+          What's on this weekend?
+        </a>
         
         <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-6">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -48,10 +58,11 @@ export default function SearchSection({ onSearch, isSearching = false }: SearchS
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="All Categories">All Categories</SelectItem>
-                  <SelectItem value="Events">Events</SelectItem>
-                  <SelectItem value="Restaurants">Restaurants</SelectItem>
-                  <SelectItem value="Entertainment">Entertainment</SelectItem>
-                  <SelectItem value="Outdoor">Outdoor</SelectItem>
+                  {EVENT_CATEGORIES.map((category) => (
+                    <SelectItem key={category} value={category}>
+                      {category}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

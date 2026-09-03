@@ -1,0 +1,570 @@
+{
+  "project": "Des Moines Insider",
+  "branchName": "claude/themis-des-moines-culture-cwlq7y",
+  "version": "1.0.0",
+  "createdAt": "2026-09-03",
+  "description": "Turn Des Moines Insider from a downstream re-listing of Catch Des Moines into the locals' layer for the metro: fresher, deeper, neighborhood-level, family-first, and honest. Catch Des Moines is the tourism bureau and writes for visitors and dues-paying members. This platform writes for people who live here.",
+  "positioning": {
+    "competitor": "Catch Des Moines (catchdesmoines.com)",
+    "competitorStrengths": [
+      "Owns Google for 'things to do in Des Moines' queries",
+      "Polished editorial staff and photography",
+      "Member venue relationships"
+    ],
+    "competitorWeaknesses": [
+      "Writes for visitors, not residents",
+      "Only lists paying members, so no taco trucks, block parties, or library storytimes",
+      "Never opinionated: no parking reality, no 'skip this', no cost after fees",
+      "Slow to update; no openings/closings tracking",
+      "No playgrounds, splash pads, indoor-play, or winter-specific guidance"
+    ],
+    "ourLane": [
+      "Neighborhood identity (Beaverdale, Drake, Sherman Hill, Valley Junction, suburbs)",
+      "Family-first: playgrounds, splash pads, indoor play, free-this-weekend",
+      "Winter-aware: indoor/outdoor and skywalk flags",
+      "Restaurant openings and closings tracker",
+      "The insider layer on every event: parking, pre-show dinner, kid-friendly, real cost",
+      "Tentpole festival guides locals actually plan around",
+      "Community submissions from venues, organizers, and residents"
+    ]
+  },
+  "principles": [
+    "Every piece of content must be a real URL. No modal-only content.",
+    "Never link a user back to catchdesmoines.com as the primary source when a direct venue or organizer URL exists.",
+    "AI enhancement must be fed real local facts from the database. Never let the model guess venue details.",
+    "Family and winter flags are first-class fields, not tags in a description.",
+    "Public routes never trigger scraping or AI spend. Admin routes require auth.",
+    "Data must persist across restarts. In-memory storage is not acceptable for any feature marked passes: true.",
+    "Each story is done only when every acceptance criterion is verifiable in the running app and `npm run check` passes."
+  ],
+  "currentStateAudit": {
+    "storage": "server/storage.ts exports `new MemStorage()`. Drizzle and Neon are configured (drizzle.config.ts, @neondatabase/serverless) but unused. All scraped events, search counts, and newsletter signups are lost on restart.",
+    "routing": "client/src/App.tsx has one page (home.tsx) plus not-found. Events open in a Dialog. Zero indexable URLs.",
+    "scraping": "POST /api/events/scrape is unauthenticated and wired to a public 'Update Events' button in home.tsx. Cron runs every 6 hours in server/routes.ts.",
+    "ai": "server/services/openai.ts prompt says 'local Des Moines event expert' but passes no local facts. Output is generic tourism copy.",
+    "taxonomy": "Locations: Downtown, East Village, Ingersoll, West Des Moines. Categories: Music, Food, Art, Outdoor, Family. Both live only in client filter dropdowns, not in the schema.",
+    "sources": "Google Events, Catch Des Moines, Eventbrite, Vibrant Music Hall, Hoyt Sherman, Val Aire, Iowa Wild, Iowa Wolves, Iowa Cubs, Iowa Barnstormers, Iowa Events Center, DSM Magazine (restaurants), Des Moines Register (restaurants).",
+    "deadEnds": "users table is defined but unused. newsletter_subscriptions collects emails with no send pipeline. Seed data in storage.ts links to catchdesmoines.com."
+  },
+  "phases": [
+    {
+      "id": "P0",
+      "name": "Foundation",
+      "goal": "Persist data, secure admin actions, make content addressable. Nothing else sticks until this is done."
+    },
+    {
+      "id": "P1",
+      "name": "Taxonomy and Flags",
+      "goal": "Model the metro the way locals talk about it. Add family and winter flags."
+    },
+    {
+      "id": "P2",
+      "name": "Local Content Surfaces",
+      "goal": "Neighborhood pages, This Weekend, tentpole festival guides, openings and closings."
+    },
+    {
+      "id": "P3",
+      "name": "Distribution",
+      "goal": "Weekly newsletter built from This Weekend. SEO metadata and sitemap."
+    },
+    {
+      "id": "P4",
+      "name": "Insider Layer and Community",
+      "goal": "Local knowledge feeds the AI. Venues and residents submit content."
+    },
+    {
+      "id": "P5",
+      "name": "Source Expansion",
+      "goal": "Add the venues and calendars locals actually use."
+    }
+  ],
+  "userStories": [
+    {
+      "id": "US-001",
+      "phase": "P0",
+      "priority": 1,
+      "title": "Replace MemStorage with a Drizzle-backed PostgreSQL storage implementation",
+      "description": "As the operator, I need all events, restaurants, attractions, playgrounds, openings, users, and newsletter signups to persist across restarts so that scraped data and user signups are never lost.",
+      "files": [
+        "server/storage.ts",
+        "server/db.ts",
+        "shared/schema.ts",
+        "drizzle.config.ts"
+      ],
+      "acceptanceCriteria": [
+        "A `DatabaseStorage` class implements the full `IStorage` interface using Drizzle against `DATABASE_URL`.",
+        "`export const storage` resolves to `DatabaseStorage` when `DATABASE_URL` is set, and falls back to `MemStorage` only in development when it is unset.",
+        "`npm run db:push` succeeds against a fresh Neon database with no manual SQL.",
+        "Restarting the server after a scrape returns the same events from GET /api/events.",
+        "Seed data no longer links to catchdesmoines.com. Seeded events link to the venue or organizer URL.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-002",
+      "phase": "P0",
+      "priority": 2,
+      "title": "Gate the scrape endpoint behind an admin secret and remove the public Update Events button",
+      "description": "As the operator, I need scraping and AI enhancement to run only on the cron schedule or on an authenticated admin request so that visitors cannot trigger Puppeteer runs or OpenAI spend.",
+      "files": [
+        "server/routes.ts",
+        "client/src/pages/home.tsx"
+      ],
+      "acceptanceCriteria": [
+        "POST /api/events/scrape returns 401 unless the request carries a valid `ADMIN_TOKEN` header or an authenticated admin session.",
+        "The 'Update Events' button is removed from `home.tsx`.",
+        "The cron job in `server/routes.ts` still runs and logs its result.",
+        "A rate limit (per IP) is applied to all POST routes under /api.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-003",
+      "phase": "P0",
+      "priority": 3,
+      "title": "Add slugs and dedicated pages for events",
+      "description": "As a resident searching Google, I need every event to have its own URL so that Des Moines Insider can rank for event-specific queries instead of being invisible.",
+      "files": [
+        "shared/schema.ts",
+        "server/storage.ts",
+        "server/routes.ts",
+        "client/src/App.tsx",
+        "client/src/pages/event.tsx",
+        "client/src/components/EventCard.tsx"
+      ],
+      "acceptanceCriteria": [
+        "`events` table gains a unique `slug` column generated from title plus date (e.g. `80-35-music-festival-2026-07-10`).",
+        "GET /api/events/slug/:slug returns the event or 404.",
+        "Route `/events/:slug` renders a full page with title, image, date, venue, price, description, and a 'Get tickets / details' button to `sourceUrl`.",
+        "Clicking an EventCard navigates to `/events/:slug` instead of opening a Dialog. The Dialog in `home.tsx` is removed.",
+        "The page sets `<title>` and `<meta name=\"description\">` from event data.",
+        "The page emits JSON-LD `Event` structured data.",
+        "Direct load of `/events/:slug` (hard refresh) works in production via the Express catch-all.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-004",
+      "phase": "P0",
+      "priority": 4,
+      "title": "Add slugs and dedicated pages for restaurants, attractions, and playgrounds",
+      "description": "As a resident, I need each place to have a URL I can share and Google can index.",
+      "files": [
+        "shared/schema.ts",
+        "server/storage.ts",
+        "server/routes.ts",
+        "client/src/App.tsx",
+        "client/src/pages/place.tsx"
+      ],
+      "acceptanceCriteria": [
+        "`restaurants`, `attractions`, and `playgrounds` tables each gain a unique `slug` column.",
+        "Routes `/restaurants/:slug`, `/attractions/:slug`, `/playgrounds/:slug` render full pages.",
+        "Each page sets `<title>`, `<meta name=\"description\">`, and JSON-LD `LocalBusiness` or `Place` structured data.",
+        "MostSearched and search-result cards link to these pages.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-005",
+      "phase": "P1",
+      "priority": 5,
+      "title": "Model neighborhoods as a first-class table",
+      "description": "As a resident, I want to browse by the neighborhoods and suburbs people here actually use, not four generic areas.",
+      "files": [
+        "shared/schema.ts",
+        "server/storage.ts",
+        "server/routes.ts",
+        "server/seed/neighborhoods.ts"
+      ],
+      "acceptanceCriteria": [
+        "A `neighborhoods` table exists with `id`, `slug`, `name`, `kind` ('neighborhood' | 'suburb' | 'district'), `description`, `centerLat`, `centerLng`, `heroImageUrl`.",
+        "Seeded with at minimum: Downtown, East Village, Court Avenue, Western Gateway, Sherman Hill, Ingersoll, Drake, Beaverdale, Highland Park, Valley Junction, Gray's Lake, Merle Hay, South Side, West Des Moines, Ankeny, Johnston, Urbandale, Waukee, Altoona, Clive, Grimes, Pleasant Hill, Norwalk, Indianola.",
+        "`events`, `restaurants`, `attractions`, `playgrounds`, and `restaurant_openings` gain a nullable `neighborhoodId` foreign key.",
+        "A classifier in `server/services/neighborhoodClassifier.ts` assigns `neighborhoodId` from venue name, address text, or lat/lng using a keyword and bounding-box map. Unknown stays null.",
+        "GET /api/neighborhoods and GET /api/neighborhoods/:slug (with counts of upcoming events, openings, playgrounds) exist.",
+        "The location filter dropdown in `EventFilters.tsx` is driven by GET /api/neighborhoods, grouped by kind.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-006",
+      "phase": "P1",
+      "priority": 6,
+      "title": "Expand event categories to reflect local culture",
+      "description": "As a resident, I want categories that match how Des Moines events are actually talked about.",
+      "files": [
+        "shared/schema.ts",
+        "server/services/eventEnhancer.ts",
+        "client/src/components/EventFilters.tsx",
+        "client/src/components/SearchSection.tsx"
+      ],
+      "acceptanceCriteria": [
+        "A shared `EVENT_CATEGORIES` constant in `shared/schema.ts` defines: Music, Food & Drink, Farmers Markets, Festivals, Arts & Theater, Sports, High School Sports, Family & Kids, Outdoor & Parks, Nightlife, Community & Civic, Fitness & Races, Holiday & Seasonal, Free.",
+        "`events.category` is validated against this list on insert.",
+        "The AI categorizer prompt in `eventEnhancer.ts` chooses from this exact list and returns one primary category plus up to two secondary categories stored in a `secondaryCategories` text array column.",
+        "Filter dropdowns in `EventFilters.tsx` and `SearchSection.tsx` render from the shared constant.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-007",
+      "phase": "P1",
+      "priority": 7,
+      "title": "Add family, cost, and winter flags to events and places",
+      "description": "As a parent in Des Moines, I need to know at a glance whether something is kid-friendly, free, indoors, and reachable by skywalk, because half the year it is below freezing.",
+      "files": [
+        "shared/schema.ts",
+        "server/services/eventEnhancer.ts",
+        "server/storage.ts",
+        "server/routes.ts",
+        "client/src/components/EventCard.tsx",
+        "client/src/components/EventFilters.tsx"
+      ],
+      "acceptanceCriteria": [
+        "`events` gains: `isFree` boolean, `isKidFriendly` boolean, `ageRange` text (nullable), `isIndoor` boolean (nullable when unknown), `isSkywalkAccessible` boolean, `weatherBackup` text (nullable).",
+        "`attractions` and `playgrounds` gain `isIndoor` and `isSkywalkAccessible`. `playgrounds` gains `hasSplashPad`, `hasShade`, `hasRestrooms`, `isFenced` booleans.",
+        "The AI enhancer extracts `isFree`, `isKidFriendly`, `ageRange`, and `isIndoor` from event text and returns them as structured JSON alongside the description. Defaults are conservative: unknown is null, not false.",
+        "A curated venue lookup in `server/data/venues.ts` sets `isIndoor` and `isSkywalkAccessible` for known venues (Wells Fargo Arena, Iowa Events Center, Civic Center, Hoyt Sherman, Temple for Performing Arts, Des Moines Art Center, Science Center of Iowa, Capital Square, etc.).",
+        "GET /api/events accepts `free=true`, `kids=true`, `indoor=true`, `skywalk=true` query params.",
+        "EventCard shows small badges for Free, Kid-Friendly, Indoor, and Skywalk when true.",
+        "EventFilters exposes toggles for Free, Kid-Friendly, Indoor Only.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-008",
+      "phase": "P2",
+      "priority": 8,
+      "title": "Neighborhood landing pages",
+      "description": "As a resident, I want a page for my neighborhood that shows what's happening, what's opening, and where to take the kids.",
+      "files": [
+        "client/src/App.tsx",
+        "client/src/pages/neighborhood.tsx",
+        "client/src/pages/neighborhoods.tsx",
+        "server/routes.ts"
+      ],
+      "acceptanceCriteria": [
+        "Route `/neighborhoods` lists all neighborhoods grouped by kind with counts.",
+        "Route `/neighborhoods/:slug` renders hero, description, upcoming events (next 30 days), recent and upcoming restaurant openings, top attractions, and playgrounds for that neighborhood.",
+        "Page sets `<title>` as '{Neighborhood} Events, Openings & Things To Do | Des Moines Insider' and a meta description.",
+        "Header nav gains a 'Neighborhoods' link.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-009",
+      "phase": "P2",
+      "priority": 9,
+      "title": "This Weekend page",
+      "description": "As a resident on a Thursday night, I want one page that answers 'what are we doing this weekend' with sections for free, family, indoor, and by neighborhood.",
+      "files": [
+        "client/src/App.tsx",
+        "client/src/pages/this-weekend.tsx",
+        "server/routes.ts",
+        "server/storage.ts"
+      ],
+      "acceptanceCriteria": [
+        "GET /api/events/this-weekend returns events from the upcoming Friday 00:00 through Sunday 23:59 America/Chicago, grouped by day.",
+        "Route `/this-weekend` renders Friday, Saturday, Sunday columns with sub-filters for Free, Family, Indoor.",
+        "If the current day is Saturday or Sunday, 'this weekend' means the current weekend.",
+        "A 'Tonight' strip at the top shows events starting today after 4pm.",
+        "The page is linked from the Header and from the home hero.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-010",
+      "phase": "P2",
+      "priority": 10,
+      "title": "Tentpole festival and season guides",
+      "description": "As a resident, I plan my year around the same dozen events. I want a permanent guide page for each one with a countdown, what's new this year, and practical tips.",
+      "files": [
+        "shared/schema.ts",
+        "server/storage.ts",
+        "server/routes.ts",
+        "server/seed/tentpoles.ts",
+        "client/src/App.tsx",
+        "client/src/pages/guide.tsx",
+        "client/src/pages/guides.tsx",
+        "client/src/components/TentpoleCountdown.tsx"
+      ],
+      "acceptanceCriteria": [
+        "A `tentpoles` table exists with `slug`, `name`, `description`, `typicalMonth`, `nextStartDate`, `nextEndDate`, `officialUrl`, `neighborhoodId`, `heroImageUrl`, `insiderTips` (jsonb array of {title, body}), `whatsNewThisYear` text, `isFree`, `isKidFriendly`.",
+        "Seeded with: Downtown Farmers' Market, Iowa State Fair, Drake Relays, 80/35 Music Festival, Hinterland Music Festival, World Food & Music Festival, Des Moines Arts Festival, RAGBRAI, Capital City Pride, CelebrAsian, Latino Heritage Festival, Iowa Cubs Opening Day, Winefest Des Moines, Blue Ribbon Bacon Festival, Principal Charity Classic, Juneteenth Celebration, Oktoberfest Des Moines, Christkindlmarket Des Moines, Iowa High School State Wrestling, Girls' and Boys' State Basketball.",
+        "Route `/guides` lists tentpoles ordered by nextStartDate with a countdown badge.",
+        "Route `/guides/:slug` renders the guide with countdown, tips, what's new, linked neighborhood, and any scraped events whose title matches the tentpole name.",
+        "The home page shows the next three upcoming tentpoles as a 'Coming Up' strip above Featured Events.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-011",
+      "phase": "P2",
+      "priority": 11,
+      "title": "Restaurant openings and closings tracker page with map",
+      "description": "As a resident, openings and closings are what I actually gossip about. I want a dedicated page, not a home-page strip, and I want closings too.",
+      "files": [
+        "shared/schema.ts",
+        "server/services/scraper.ts",
+        "server/storage.ts",
+        "server/routes.ts",
+        "client/src/App.tsx",
+        "client/src/pages/openings.tsx",
+        "client/src/components/RestaurantOpenings.tsx"
+      ],
+      "acceptanceCriteria": [
+        "`restaurant_openings` `status` enum expands to: 'announced' | 'opening_soon' | 'newly_opened' | 'closed' | 'closing_soon'.",
+        "Table gains `slug`, `neighborhoodId`, `lat`, `lng`, `address`, `firstLookTip` text (nullable).",
+        "The DSM Magazine and Register scrapers also search for closing news and classify to 'closed' or 'closing_soon'.",
+        "Route `/openings` renders tabs for Opening Soon, Just Opened, Announced, Closed, with a map (Leaflet via CDN, no API key) showing pins colored by status.",
+        "Each entry has its own route `/openings/:slug` with source attribution.",
+        "Home page keeps a compact 'Latest Openings' strip that links to `/openings`.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-012",
+      "phase": "P2",
+      "priority": 12,
+      "title": "Family hub: playgrounds, splash pads, indoor play, and free this weekend",
+      "description": "As a parent, playgrounds are the one thing Catch Des Moines ignores. I want a family hub that is genuinely useful in July and in January.",
+      "files": [
+        "shared/schema.ts",
+        "server/seed/playgrounds.ts",
+        "server/routes.ts",
+        "client/src/App.tsx",
+        "client/src/pages/family.tsx"
+      ],
+      "acceptanceCriteria": [
+        "`playgrounds` gains `kind` ('playground' | 'splash_pad' | 'indoor_play' | 'library' | 'nature_center') and `seasonOpen` text (nullable, e.g. 'Memorial Day to Labor Day').",
+        "Seeded with at minimum 25 real metro locations across kinds, including Gray's Lake, Ewing Park, Raccoon River Park, Ashworth Pool splash pad, Science Center of Iowa, Blank Park Zoo, Des Moines Public Library branches, and Jester Park Nature Center.",
+        "Route `/family` renders sections: Free This Weekend (events where isFree && isKidFriendly), Splash Pads (only shown May through September), Indoor Play (promoted October through March), Playgrounds by neighborhood.",
+        "Header nav gains a 'Family' link.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-013",
+      "phase": "P3",
+      "priority": 13,
+      "title": "Weekly newsletter send built from This Weekend",
+      "description": "As a subscriber, I want a Thursday email that is the This Weekend page in my inbox, so the newsletter signup is not a dead end.",
+      "files": [
+        "server/services/newsletter.ts",
+        "server/routes.ts",
+        "shared/schema.ts",
+        "client/src/components/Newsletter.tsx"
+      ],
+      "acceptanceCriteria": [
+        "`newsletter_subscriptions` gains `confirmedAt`, `unsubscribedAt`, `confirmToken`, `neighborhoodId` (optional preference).",
+        "Signup sends a confirmation email via Resend (`RESEND_API_KEY`). Only confirmed addresses receive sends.",
+        "A cron job runs Thursday 16:00 America/Chicago, renders the This Weekend data into an HTML email, and sends to confirmed subscribers.",
+        "Every email includes a working one-click unsubscribe link.",
+        "POST /api/newsletter/send-test with admin auth sends the current issue to a single address.",
+        "Newsletter component offers an optional neighborhood preference.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-014",
+      "phase": "P3",
+      "priority": 14,
+      "title": "Sitemap, robots, canonical URLs, and Open Graph",
+      "description": "As the operator, I need Google and social platforms to index and preview every page.",
+      "files": [
+        "server/routes.ts",
+        "server/services/sitemap.ts",
+        "client/index.html",
+        "client/src/lib/seo.ts"
+      ],
+      "acceptanceCriteria": [
+        "GET /sitemap.xml lists all event, place, neighborhood, guide, and opening URLs with lastmod.",
+        "GET /robots.txt allows crawling and references the sitemap.",
+        "Every page sets canonical URL, og:title, og:description, og:image (falls back to a default branded image).",
+        "A shared `useSeo()` hook or helper sets these consistently.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-015",
+      "phase": "P4",
+      "priority": 15,
+      "title": "Local knowledge table that feeds the AI enhancer",
+      "description": "As a reader, I want the AI-written blurb to contain things only a local would know: where to park, where to eat before, whether to bring a stroller. The model must be given these facts, not asked to invent them.",
+      "files": [
+        "shared/schema.ts",
+        "server/data/venues.ts",
+        "server/services/openai.ts",
+        "server/services/eventEnhancer.ts"
+      ],
+      "acceptanceCriteria": [
+        "A `venues` table exists with `slug`, `name`, `address`, `neighborhoodId`, `lat`, `lng`, `parkingNotes`, `nearbyEats` (jsonb array), `kidNotes`, `isIndoor`, `isSkywalkAccessible`, `websiteUrl`.",
+        "Seeded with at minimum 30 real venues covering every scraper source plus Civic Center, Wooly's, xBk, Temple for Performing Arts, Principal Park, Drake Stadium, Knapp Center, Jasper Winery, Iowa State Fairgrounds, Lauridsen Amphitheater, Water Works Park, Brenton Skating Plaza.",
+        "`events` gains a nullable `venueId` foreign key set by matching venue name or location text.",
+        "The enhancement prompt in `openai.ts` receives the matched venue's parkingNotes, nearbyEats, kidNotes, and neighborhood name as context, and is instructed to use only provided facts.",
+        "The enhancer returns structured JSON: `description`, `insiderTip` (one sentence), and the flag fields from US-007.",
+        "Event pages render an 'Insider Tip' callout when present.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-016",
+      "phase": "P4",
+      "priority": 16,
+      "title": "Venue and organizer event submission",
+      "description": "As a small venue, food truck, or block party organizer who is not a Catch Des Moines member, I want to submit my event and have it appear after review.",
+      "files": [
+        "shared/schema.ts",
+        "server/routes.ts",
+        "server/storage.ts",
+        "client/src/App.tsx",
+        "client/src/pages/submit.tsx",
+        "client/src/pages/admin/submissions.tsx"
+      ],
+      "acceptanceCriteria": [
+        "`event_submissions` table with all event fields plus `submitterName`, `submitterEmail`, `status` ('pending' | 'approved' | 'rejected'), `reviewedAt`.",
+        "Route `/submit` renders a form with honeypot field and per-IP rate limit.",
+        "Admin route `/admin/submissions` (protected) lists pending items with Approve and Reject actions. Approve copies the row into `events` with `source: 'community'` and runs the enhancer.",
+        "Approved community events show a 'Community Submitted' badge.",
+        "Footer links to `/submit` as 'Add your event'.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-017",
+      "phase": "P4",
+      "priority": 17,
+      "title": "User accounts with saved events and neighborhood preference",
+      "description": "As a resident, I want to save events and set my home neighborhood so the site feels like mine.",
+      "files": [
+        "shared/schema.ts",
+        "server/auth.ts",
+        "server/routes.ts",
+        "client/src/pages/account.tsx",
+        "client/src/components/Header.tsx"
+      ],
+      "acceptanceCriteria": [
+        "`users` gains `email`, `homeNeighborhoodId`, `createdAt`. `password` is stored as a bcrypt hash. `username` remains unique.",
+        "A `saved_events` join table exists.",
+        "Session auth via `express-session` with `connect-pg-simple` (already in dependencies).",
+        "Routes: POST /api/auth/register, /login, /logout, GET /api/auth/me, POST/DELETE /api/events/:id/save, GET /api/me/saved.",
+        "Header shows Sign In or the username with a dropdown to Saved and Account.",
+        "Home page, when logged in with a home neighborhood, shows a 'Near You in {Neighborhood}' section first.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-018",
+      "phase": "P4",
+      "priority": 18,
+      "title": "Resident tips on events and places",
+      "description": "As a local, I want to add a one-line tip ('park in the ramp on 3rd, not the lot') that other residents see.",
+      "files": [
+        "shared/schema.ts",
+        "server/routes.ts",
+        "client/src/components/TipsList.tsx"
+      ],
+      "acceptanceCriteria": [
+        "`tips` table with `targetType` ('event' | 'restaurant' | 'attraction' | 'playground' | 'venue'), `targetId`, `userId`, `body` (max 280 chars), `status` ('visible' | 'hidden'), `createdAt`.",
+        "Logged-in users can post one tip per target. Tips render newest first under a 'Locals say' heading on event and place pages.",
+        "Admin can hide a tip.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-019",
+      "phase": "P5",
+      "priority": 19,
+      "title": "Add missing performing arts, nightlife, and attraction sources",
+      "description": "As a resident, I expect the calendar to include the venues I actually go to.",
+      "files": [
+        "server/services/scraper.ts",
+        "server/services/scrapers/"
+      ],
+      "acceptanceCriteria": [
+        "Scrapers exist and return events for: Des Moines Performing Arts (Civic Center, Temple, Stoner Theater), Wooly's, xBk Live, Blank Park Zoo, Science Center of Iowa, Des Moines Art Center, Greater Des Moines Botanical Garden, Living History Farms, Adventureland, Jasper Winery, Iowa State Fairgrounds year-round calendar, Lauridsen Amphitheater at Water Works Park.",
+        "Each scraper is in its own file under `server/services/scrapers/` and registered in a `SOURCES` array with `name`, `defaultCategory`, `venueSlug`.",
+        "`scrapeAllSources` runs sources with a concurrency limit of 3 and records per-source success, count, and duration in a `scrape_runs` table.",
+        "A scraper failing does not abort the run.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-020",
+      "phase": "P5",
+      "priority": 20,
+      "title": "Add civic, library, parks, and suburban calendar sources",
+      "description": "As a resident of Ankeny or Beaverdale, the free stuff near me lives on city and library calendars, not on Catch Des Moines.",
+      "files": [
+        "server/services/scrapers/"
+      ],
+      "acceptanceCriteria": [
+        "Scrapers exist for: Des Moines Public Library events, Des Moines Parks and Recreation, Polk County Conservation (Jester Park), City of West Des Moines, City of Ankeny, City of Urbandale, City of Johnston, City of Waukee, City of Altoona, Historic Valley Junction.",
+        "Events from these sources default to `isFree: true` unless price text is found, and are assigned the matching neighborhood.",
+        "Where a source exposes an iCal or RSS feed, the scraper consumes the feed instead of Puppeteer.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-021",
+      "phase": "P5",
+      "priority": 21,
+      "title": "Add college and high school sports sources",
+      "description": "As a resident, Drake and Iowa high school sports are a cultural pillar here and are entirely absent.",
+      "files": [
+        "server/services/scrapers/"
+      ],
+      "acceptanceCriteria": [
+        "Scrapers exist for Drake Bulldogs athletics (all sports) and the Iowa High School Athletic Association and Iowa Girls High School Athletic Union state tournament schedules.",
+        "Events are categorized 'Sports' or 'High School Sports' with venue set (Knapp Center, Drake Stadium, Wells Fargo Arena, Principal Park).",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-022",
+      "phase": "P5",
+      "priority": 22,
+      "title": "Demote Catch Des Moines and Google Events to fallback sources",
+      "description": "As the operator, once direct venue sources exist I want Catch Des Moines used only to fill gaps, and I never want to send users to catchdesmoines.com when a direct URL exists.",
+      "files": [
+        "server/services/scraper.ts",
+        "server/services/scrapers/catchDesMoines.ts"
+      ],
+      "acceptanceCriteria": [
+        "Deduplication prefers the event whose `sourceUrl` is not catchdesmoines.com or google.com when two events match.",
+        "For any stored event with a catchdesmoines.com sourceUrl, the scraper attempts to resolve the direct organizer URL from the Catch DSM detail page and replaces it.",
+        "A `sourcePriority` integer on each source controls dedup winner selection. Direct venue sources rank above aggregators.",
+        "`npm run check` passes."
+      ],
+      "passes": true
+    }
+  ],
+  "definitionOfDone": [
+    "All acceptance criteria for the story are met and manually verified in a running dev server.",
+    "`npm run check` passes with zero errors.",
+    "No public route triggers scraping or AI calls.",
+    "New tables are added to `shared/schema.ts` with insert schemas and types, and `npm run db:push` succeeds.",
+    "Set `passes` to true on the story in this file in the same commit that completes it."
+  ]
+}

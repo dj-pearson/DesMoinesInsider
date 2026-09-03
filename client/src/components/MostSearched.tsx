@@ -1,13 +1,11 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Restaurant, Attraction, Playground } from "@shared/schema";
 import { Utensils, MapPin, Baby, Star } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
 
 export default function MostSearched() {
-  const queryClient = useQueryClient();
-
   const { data: restaurants, isLoading: restaurantsLoading } = useQuery<Restaurant[]>({
     queryKey: ['/api/restaurants/top'],
   });
@@ -19,21 +17,6 @@ export default function MostSearched() {
   const { data: playgrounds, isLoading: playgroundsLoading } = useQuery<Playground[]>({
     queryKey: ['/api/playgrounds/top'],
   });
-
-  const incrementSearchMutation = useMutation({
-    mutationFn: async ({ type, id }: { type: string; id: string }) => {
-      return apiRequest('POST', `/api/${type}/${id}/search`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/restaurants/top'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/attractions/top'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/playgrounds/top'] });
-    },
-  });
-
-  const handleItemClick = (type: string, id: string) => {
-    incrementSearchMutation.mutate({ type, id });
-  };
 
   const LoadingSkeleton = () => (
     <div className="space-y-4">
@@ -70,10 +53,10 @@ export default function MostSearched() {
             ) : restaurants && restaurants.length > 0 ? (
               <div className="space-y-4">
                 {restaurants.map((restaurant) => (
-                  <div 
+                  <Link
                     key={restaurant.id}
-                    className="flex items-center p-3 hover:bg-neutral-50 rounded-lg transition-colors cursor-pointer" 
-                    onClick={() => handleItemClick('restaurants', restaurant.id)}
+                    href={restaurant.slug ? `/restaurants/${restaurant.slug}` : "#"}
+                    className="flex items-center p-3 hover:bg-neutral-50 rounded-lg transition-colors"
                   >
                     {restaurant.imageUrl && (
                       <img 
@@ -96,7 +79,7 @@ export default function MostSearched() {
                         <span className="ml-1 text-sm font-semibold">{restaurant.rating}</span>
                       </div>
                     </div>
-                  </div>
+                  </Link>
                 ))}
               </div>
             ) : (
@@ -123,10 +106,10 @@ export default function MostSearched() {
             ) : attractions && attractions.length > 0 ? (
               <div className="space-y-4">
                 {attractions.map((attraction) => (
-                  <div 
+                  <Link
                     key={attraction.id}
-                    className="flex items-center p-3 hover:bg-neutral-50 rounded-lg transition-colors cursor-pointer"
-                    onClick={() => handleItemClick('attractions', attraction.id)}
+                    href={attraction.slug ? `/attractions/${attraction.slug}` : "#"}
+                    className="flex items-center p-3 hover:bg-neutral-50 rounded-lg transition-colors"
                   >
                     {attraction.imageUrl && (
                       <img 
@@ -143,7 +126,7 @@ export default function MostSearched() {
                       <h5 className="font-semibold">{attraction.name}</h5>
                       <p className="text-sm text-neutral-500">{attraction.type}</p>
                     </div>
-                  </div>
+                  </Link>
                 ))}
               </div>
             ) : (
@@ -170,10 +153,10 @@ export default function MostSearched() {
             ) : playgrounds && playgrounds.length > 0 ? (
               <div className="space-y-4">
                 {playgrounds.map((playground) => (
-                  <div 
+                  <Link
                     key={playground.id}
-                    className="flex items-center p-3 hover:bg-neutral-50 rounded-lg transition-colors cursor-pointer"
-                    onClick={() => handleItemClick('playgrounds', playground.id)}
+                    href={playground.slug ? `/playgrounds/${playground.slug}` : "#"}
+                    className="flex items-center p-3 hover:bg-neutral-50 rounded-lg transition-colors"
                   >
                     {playground.imageUrl && (
                       <img 
@@ -190,7 +173,7 @@ export default function MostSearched() {
                       <h5 className="font-semibold">{playground.name}</h5>
                       <p className="text-sm text-neutral-500">{playground.features}</p>
                     </div>
-                  </div>
+                  </Link>
                 ))}
               </div>
             ) : (

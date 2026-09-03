@@ -6,10 +6,9 @@ import { Event } from "@shared/schema";
 
 interface FeaturedEventsProps {
   onViewAllEvents: () => void;
-  onViewEventDetails: (event: Event) => void;
 }
 
-export default function FeaturedEvents({ onViewAllEvents, onViewEventDetails }: FeaturedEventsProps) {
+export default function FeaturedEvents({ onViewAllEvents }: FeaturedEventsProps) {
   const { data: events, isLoading, error } = useQuery<Event[]>({
     queryKey: ['/api/events/featured'],
   });
@@ -53,11 +52,7 @@ export default function FeaturedEvents({ onViewAllEvents, onViewEventDetails }: 
         ) : events && events.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {events.map((event) => (
-              <EventCard 
-                key={event.id} 
-                event={event} 
-                onViewDetails={onViewEventDetails}
-              />
+              <EventCard key={event.id} event={event} />
             ))}
           </div>
         ) : (

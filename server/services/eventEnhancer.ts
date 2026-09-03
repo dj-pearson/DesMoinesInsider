@@ -1,55 +1,105 @@
-import { enhanceEventDescription } from './openai.js';
+import { enhanceAndCategorizeEvent } from './openai.js';
 import { ScrapedEvent } from './scraper.js';
-import { InsertEvent } from '@shared/schema.js';
+import { EventToCreate } from '@shared/schema.js';
+import { normalizeCategory } from '@shared/categories.js';
+import { extractEventFlags, mergeFlags } from '@shared/eventFlags.js';
+import { findVenueFacts } from '../data/venues.js';
 
-export async function enhanceEvents(scrapedEvents: ScrapedEvent[], source: string): Promise<InsertEvent[]> {
-  const enhancedEvents: InsertEvent[] = [];
+/**
+ * Turn scraped events into rows ready for the database.
+ *
+ * Categories are always normalized, whether or not the AI call succeeds, since
+ * the insert schema only accepts exact members of our category list.
+ */
+export async function enhanceEvents(
+  scrapedEvents: ScrapedEvent[],
+  source: string,
+): Promise<EventToCreate[]> {
+  const enhancedEvents: EventToCreate[] = [];
 
   for (const event of scrapedEvents) {
+    // Flags come from three sources, most trusted first: curated venue facts,
+    // then what the event text states outright, then the AI's inference.
+    const venueFacts = findVenueFacts(event.venue, event.location, event.title);
+    const textFlags = extractEventFlags({
+      title: event.title,
+      description: event.description,
+      price: event.price,
+      venue: event.venue,
+      location: event.location,
+    });
+
+    const base = {
+      title: event.title,
+      originalDescription: event.description,
+      date: event.date,
+      location: event.location,
+      source,
+      sourceUrl: event.sourceUrl,
+      imageUrl: event.imageUrl,
+      venue: event.venue,
+      price: event.price,
+      // Only a curated venue can assert skywalk access; nothing else knows.
+      isSkywalkAccessible: venueFacts?.isSkywalkAccessible ?? null,
+      // A source that names its own neighborhood beats the keyword classifier.
+      neighborhoodSlug: event.neighborhoodSlug,
+    };
+
     try {
-      const enhancedDescription = await enhanceEventDescription(
-        event.title,
-        event.description,
-        event.location,
-        event.category
+      const result = await enhanceAndCategorizeEvent({
+        title: event.title,
+        description: event.description,
+        location: event.location,
+        venue: event.venue,
+        price: event.price,
+        rawCategory: event.category,
+        // Curated facts, so the tip is grounded rather than invented.
+        venueContext: venueFacts
+          ? {
+              name: venueFacts.name,
+              neighborhood: venueFacts.neighborhoodSlug,
+              parkingNotes: venueFacts.parkingNotes,
+              nearbyEats: venueFacts.nearbyEats,
+              kidNotes: venueFacts.kidNotes,
+            }
+          : null,
+      });
+
+      // Order is precedence. A stated price in the event's own text outranks
+      // the source's default, so a library class with a $5 materials fee is not
+      // published as free; the model only fills what nothing else answered.
+      const flags = mergeFlags(
+        venueFacts ? { isIndoor: venueFacts.isIndoor } : null,
+        textFlags,
+        event.isFree === undefined ? null : { isFree: event.isFree },
+        result.flags,
       );
 
-      const enhancedEvent: InsertEvent = {
-        title: event.title,
-        originalDescription: event.description,
-        enhancedDescription,
-        date: event.date,
-        location: event.location,
-        category: event.category,
-        source,
-        sourceUrl: event.sourceUrl,
-        imageUrl: event.imageUrl,
-        venue: event.venue,
-        price: event.price,
-        isEnhanced: true,
-      };
-
-      enhancedEvents.push(enhancedEvent);
+      enhancedEvents.push({
+        ...base,
+        ...flags,
+        enhancedDescription: result.description,
+        insiderTip: result.insiderTip,
+        category: result.category,
+        secondaryCategories: result.secondaryCategories,
+        // Only claim AI enhancement when the copy actually changed.
+        isEnhanced: result.description !== event.description,
+      });
     } catch (error) {
       console.error(`Failed to enhance event: ${event.title}`, error);
-      
-      // Add unenhanced event as fallback
-      const fallbackEvent: InsertEvent = {
-        title: event.title,
-        originalDescription: event.description,
-        enhancedDescription: event.description,
-        date: event.date,
-        location: event.location,
-        category: event.category,
-        source,
-        sourceUrl: event.sourceUrl,
-        imageUrl: event.imageUrl,
-        venue: event.venue,
-        price: event.price,
-        isEnhanced: false,
-      };
 
-      enhancedEvents.push(fallbackEvent);
+      enhancedEvents.push({
+        ...base,
+        ...mergeFlags(
+          venueFacts ? { isIndoor: venueFacts.isIndoor } : null,
+          textFlags,
+          event.isFree === undefined ? null : { isFree: event.isFree },
+        ),
+        enhancedDescription: event.description,
+        category: normalizeCategory(event.category, event.title),
+        secondaryCategories: [],
+        isEnhanced: false,
+      });
     }
   }
 

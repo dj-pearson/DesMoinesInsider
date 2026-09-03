@@ -1,6 +1,8 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { initializeStorage } from "./storage";
+import { setupSessions } from "./auth";
 
 const app = express();
 app.use(express.json());
@@ -37,6 +39,13 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Populate baseline content before serving traffic so a fresh database is
+  // never handed to users as an empty site.
+  await initializeStorage();
+
+  // Sessions must be in place before any route reads req.session.
+  setupSessions(app);
+
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

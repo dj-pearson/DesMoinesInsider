@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
 import Header from "@/components/Header";
 import SearchSection from "@/components/SearchSection";
 import FeaturedEvents from "@/components/FeaturedEvents";
@@ -8,45 +7,35 @@ import EventFilters from "@/components/EventFilters";
 import Newsletter from "@/components/Newsletter";
 import Footer from "@/components/Footer";
 import { RestaurantOpenings } from "@/components/RestaurantOpenings";
+import ComingUp from "@/components/ComingUp";
+import NearYou from "@/components/NearYou";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Link } from "wouter";
+import { useSeo } from "@/lib/seo";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
-import { Event } from "@shared/schema";
-import { Calendar, MapPin, ExternalLink, Sparkles, Search as SearchIcon } from "lucide-react";
+import { Attraction, Event, Playground, Restaurant } from "@shared/schema";
+import { Calendar, MapPin, Search as SearchIcon } from "lucide-react";
 import { format } from "date-fns";
 
 interface SearchResults {
   events: Event[];
-  restaurants: any[];
-  attractions: any[];
-  playgrounds: any[];
+  restaurants: Restaurant[];
+  attractions: Attraction[];
+  playgrounds: Playground[];
 }
 
 export default function Home() {
-  const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
-  const [showEventDetails, setShowEventDetails] = useState(false);
   const [showAllEvents, setShowAllEvents] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResults | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const { toast } = useToast();
 
-  const scrapeMutation = useMutation({
-    mutationFn: () => apiRequest('POST', '/api/events/scrape'),
-    onSuccess: () => {
-      toast({
-        title: "Events Updated!",
-        description: "Latest events have been scraped and enhanced with AI.",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Scraping Failed",
-        description: error.message || "Failed to scrape events. Please try again.",
-        variant: "destructive",
-      });
-    },
+  useSeo({
+    title: "Des Moines Insider",
+    description:
+      "Events, new restaurant openings, playgrounds and things to do across the Des Moines metro, written for people who live here.",
+    canonicalPath: "/",
   });
 
   const handleSearch = async (query: string, category: string) => {
@@ -105,21 +94,8 @@ export default function Home() {
     setSearchQuery("");
   };
 
-  const handleViewEventDetails = (event: Event) => {
-    setSelectedEvent(event);
-    setShowEventDetails(true);
-  };
-
   const handleViewAllEvents = () => {
     setShowAllEvents(true);
-  };
-
-  const formatEventDate = (date: string | Date) => {
-    try {
-      return format(new Date(date), "EEEE, MMMM d, yyyy 'at' h:mm a");
-    } catch {
-      return "Date and time to be announced";
-    }
   };
 
   return (
@@ -155,10 +131,10 @@ export default function Home() {
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {searchResults.events.map((event) => (
-                    <div
+                    <Link
                       key={event.id}
-                      className="bg-white border border-neutral-200 rounded-lg overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
-                      onClick={() => handleViewEventDetails(event)}
+                      href={event.slug ? `/events/${event.slug}` : "#"}
+                      className="block bg-white border border-neutral-200 rounded-lg overflow-hidden hover:shadow-lg transition-shadow"
                     >
                       {event.imageUrl && (
                         <img
@@ -184,7 +160,7 @@ export default function Home() {
                           {event.location}
                         </div>
                       </div>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </div>
@@ -198,15 +174,16 @@ export default function Home() {
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {searchResults.restaurants.map((restaurant) => (
-                    <div
+                    <Link
                       key={restaurant.id}
-                      className="bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
+                      href={restaurant.slug ? `/restaurants/${restaurant.slug}` : "#"}
+                      className="block bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
                     >
                       <h5 className="text-lg font-semibold text-neutral-900 mb-2">
                         {restaurant.name}
                       </h5>
                       <p className="text-sm text-neutral-600">{restaurant.cuisine}</p>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </div>
@@ -220,15 +197,16 @@ export default function Home() {
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {searchResults.attractions.map((attraction) => (
-                    <div
+                    <Link
                       key={attraction.id}
-                      className="bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
+                      href={attraction.slug ? `/attractions/${attraction.slug}` : "#"}
+                      className="block bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
                     >
                       <h5 className="text-lg font-semibold text-neutral-900 mb-2">
                         {attraction.name}
                       </h5>
                       <p className="text-sm text-neutral-600">{attraction.type}</p>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </div>
@@ -242,15 +220,16 @@ export default function Home() {
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {searchResults.playgrounds.map((playground) => (
-                    <div
+                    <Link
                       key={playground.id}
-                      className="bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
+                      href={playground.slug ? `/playgrounds/${playground.slug}` : "#"}
+                      className="block bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
                     >
                       <h5 className="text-lg font-semibold text-neutral-900 mb-2">
                         {playground.name}
                       </h5>
                       <p className="text-sm text-neutral-600">{playground.features}</p>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </div>
@@ -275,10 +254,9 @@ export default function Home() {
 
       {!showAllEvents && !searchResults && (
         <>
-          <FeaturedEvents 
-            onViewAllEvents={handleViewAllEvents}
-            onViewEventDetails={handleViewEventDetails}
-          />
+          <NearYou />
+          <ComingUp />
+          <FeaturedEvents onViewAllEvents={handleViewAllEvents} />
           <MostSearched />
           
           {/* Restaurant Openings Section */}
@@ -294,112 +272,21 @@ export default function Home() {
         <div className="py-8">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-8">
             <div className="flex items-center justify-between">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => setShowAllEvents(false)}
               >
                 ← Back to Featured
               </Button>
-              <Button 
-                onClick={() => scrapeMutation.mutate()}
-                disabled={scrapeMutation.isPending}
-                className="bg-accent hover:bg-green-700 text-white"
-              >
-                <Sparkles className="h-4 w-4 mr-2" />
-                {scrapeMutation.isPending ? "Updating..." : "Update Events"}
-              </Button>
             </div>
           </div>
-          <EventFilters onViewEventDetails={handleViewEventDetails} />
+          <EventFilters />
         </div>
       )}
       
       <Newsletter />
       <Footer />
 
-      {/* Event Details Dialog */}
-      <Dialog open={showEventDetails} onOpenChange={setShowEventDetails}>
-        <DialogContent className="max-w-2xl">
-          {selectedEvent && (
-            <>
-              <DialogHeader>
-                <DialogTitle className="text-2xl font-bold">
-                  {selectedEvent.title}
-                </DialogTitle>
-              </DialogHeader>
-              
-              <div className="space-y-4">
-                {selectedEvent.imageUrl && (
-                  <img 
-                    src={selectedEvent.imageUrl} 
-                    alt={selectedEvent.title}
-                    className="w-full h-64 object-cover rounded-lg"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      target.style.display = 'none';
-                    }}
-                  />
-                )}
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="flex items-center text-neutral-600">
-                    <Calendar className="h-5 w-5 mr-2" />
-                    <span>{formatEventDate(selectedEvent.date)}</span>
-                  </div>
-                  
-                  <div className="flex items-center text-neutral-600">
-                    <MapPin className="h-5 w-5 mr-2" />
-                    <span>{selectedEvent.location}</span>
-                  </div>
-                </div>
-
-                {selectedEvent.venue && (
-                  <div>
-                    <h4 className="font-semibold mb-2">Venue</h4>
-                    <p className="text-neutral-600">{selectedEvent.venue}</p>
-                  </div>
-                )}
-
-                {selectedEvent.price && (
-                  <div>
-                    <h4 className="font-semibold mb-2">Price</h4>
-                    <p className="text-neutral-600">{selectedEvent.price}</p>
-                  </div>
-                )}
-
-                <div>
-                  <h4 className="font-semibold mb-2">Description</h4>
-                  <p className="text-neutral-600 leading-relaxed">
-                    {selectedEvent.enhancedDescription || selectedEvent.originalDescription}
-                  </p>
-                  {selectedEvent.isEnhanced && (
-                    <p className="text-sm text-accent mt-2 flex items-center">
-                      <Sparkles className="h-4 w-4 mr-1" />
-                      Enhanced with AI
-                    </p>
-                  )}
-                </div>
-
-                {selectedEvent.sourceUrl && (
-                  <div className="pt-4 border-t">
-                    <Button asChild className="w-full">
-                      <a 
-                        href={selectedEvent.sourceUrl} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="flex items-center justify-center"
-                      >
-                        <ExternalLink className="h-4 w-4 mr-2" />
-                        View Original Event
-                      </a>
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

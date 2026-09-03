@@ -1,141 +1,70 @@
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Link } from "wouter";
+import { MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { ExternalLink, Calendar, MapPin } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { OPENING_STATUS_META } from "@shared/openingStatus";
+import type { OpeningStatus, RestaurantOpening } from "@shared/schema";
 
-interface RestaurantOpening {
-  id: string;
-  name: string;
-  description: string | null;
-  location: string | null;
-  cuisine: string | null;
-  openingDate: string | null;
-  status: 'opening_soon' | 'newly_opened' | 'announced';
-  sourceUrl: string | null;
-  createdAt: string;
-}
-
-const statusConfig = {
-  opening_soon: { label: "Opening Soon", color: "bg-yellow-500" },
-  newly_opened: { label: "Newly Opened", color: "bg-green-500" },
-  announced: { label: "Announced", color: "bg-blue-500" }
-};
-
+/**
+ * Compact home-page strip. The full tracker, with tabs and a map, lives at
+ * /openings; this is a teaser that links there.
+ */
 export function RestaurantOpenings() {
   const { data: openings = [], isLoading } = useQuery<RestaurantOpening[]>({
     queryKey: ["/api/restaurant-openings"],
   });
 
-  if (isLoading) {
-    return (
-      <div className="space-y-4">
-        <h2 className="text-2xl font-bold">New Restaurant Openings</h2>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[...Array(3)].map((_, i) => (
-            <Card key={i} className="h-48 animate-pulse">
-              <div className="p-6">
-                <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded mb-4"></div>
-                <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded mb-2"></div>
-                <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded mb-2"></div>
-                <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded mt-4"></div>
-              </div>
-            </Card>
-          ))}
-        </div>
-      </div>
-    );
-  }
+  // Closed listings are news too, but the home strip leads with what is new.
+  const latest = openings
+    .filter((o) => o.status !== "closed")
+    .slice(0, 3);
 
-  if (openings.length === 0) {
-    return (
-      <div className="space-y-4">
-        <h2 className="text-2xl font-bold">New Restaurant Openings</h2>
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-center text-muted-foreground">
-              No restaurant openings tracked yet. Check back soon for the latest restaurant news!
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  if (!isLoading && latest.length === 0) return null;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">New Restaurant Openings</h2>
-        <p className="text-sm text-muted-foreground">
-          Latest restaurant news from local sources
-        </p>
+    <div>
+      <div className="flex items-baseline justify-between mb-6">
+        <h2 className="text-2xl font-bold text-neutral-900">Latest openings</h2>
+        <Link href="/openings" className="text-sm text-primary hover:underline font-semibold">
+          Openings &amp; closings →
+        </Link>
       </div>
-      
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {openings.map((opening) => (
-          <Card key={opening.id} className="hover:shadow-lg transition-shadow duration-200">
-            <CardHeader className="space-y-3">
-              <div className="flex items-start justify-between">
-                <CardTitle className="text-lg leading-tight">{opening.name}</CardTitle>
-                <Badge 
-                  variant="secondary" 
-                  className={`${statusConfig[opening.status].color} text-white text-xs`}
-                >
-                  {statusConfig[opening.status].label}
+
+      {isLoading ? (
+        <div className="grid gap-4 md:grid-cols-3">
+          {[...Array(3)].map((_, i) => (
+            <Skeleton key={i} className="h-32 rounded-xl" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-3">
+          {latest.map((opening) => {
+            const meta = OPENING_STATUS_META[opening.status as OpeningStatus];
+            return (
+              <Link
+                key={opening.id}
+                href={opening.slug ? `/openings/${opening.slug}` : "/openings"}
+                className="block bg-white rounded-xl border border-neutral-200 p-5 hover:shadow-lg transition-shadow"
+              >
+                <Badge className={`${meta?.badgeClass ?? ""} mb-2`}>
+                  {meta?.label ?? opening.status}
                 </Badge>
-              </div>
-              
-              <div className="flex flex-col gap-2 text-sm text-muted-foreground">
-                {opening.location && (
-                  <div className="flex items-center gap-1">
-                    <MapPin className="h-3 w-3" />
-                    <span>{opening.location}</span>
-                  </div>
-                )}
-                
+                <h3 className="font-bold text-neutral-900 mb-1">{opening.name}</h3>
                 {opening.cuisine && (
-                  <div className="flex items-center gap-1">
-                    <span className="font-medium text-xs bg-secondary px-2 py-1 rounded">
-                      {opening.cuisine}
-                    </span>
-                  </div>
+                  <p className="text-sm text-neutral-600">{opening.cuisine}</p>
                 )}
-                
-                {opening.openingDate && (
-                  <div className="flex items-center gap-1">
-                    <Calendar className="h-3 w-3" />
-                    <span>{new Date(opening.openingDate).toLocaleDateString()}</span>
-                  </div>
+                {opening.location && (
+                  <p className="text-sm text-neutral-500 flex items-center mt-1">
+                    <MapPin className="h-4 w-4 mr-1.5" />
+                    {opening.location}
+                  </p>
                 )}
-              </div>
-            </CardHeader>
-            
-            <CardContent className="space-y-4">
-              {opening.description && (
-                <CardDescription className="text-sm line-clamp-3">
-                  {opening.description}
-                </CardDescription>
-              )}
-              
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">
-                  Added {new Date(opening.createdAt).toLocaleDateString()}
-                </span>
-                
-                {opening.sourceUrl && (
-                  <a
-                    href={opening.sourceUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                  >
-                    Read More <ExternalLink className="h-3 w-3" />
-                  </a>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+              </Link>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

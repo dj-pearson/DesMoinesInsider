@@ -1,4 +1,8 @@
+import { classifyOpeningStatus } from '@shared/openingStatus.js';
+import type { OpeningStatus } from '@shared/schema.js';
 import puppeteer from "puppeteer";
+import { scrapeSources, SOURCE_PRIORITY } from "./scrapers/index.js";
+import type { SourceRunResult } from "./scrapers/types.js";
 
 export interface ScrapedEvent {
   title: string;
@@ -10,6 +14,24 @@ export interface ScrapedEvent {
   imageUrl?: string;
   venue?: string;
   price?: string;
+  /**
+   * What the source itself knows about admission, when it knows it. A library
+   * or city parks calendar is free by default in a way a ticketed venue is not.
+   * Left undefined by sources that cannot say; it never overrides a price the
+   * event text states outright.
+   */
+  isFree?: boolean;
+  /**
+   * Neighborhood the source can name directly, as a slug from the neighborhood
+   * seed. A suburb's own calendar knows it is in Ankeny; the keyword classifier
+   * only guesses. Set this and the guess is skipped.
+   */
+  neighborhoodSlug?: string;
+  /**
+   * Rank of the source this came from, used to pick a winner when two sources
+   * list the same event. See SOURCE_PRIORITY in scrapers/types.ts.
+   */
+  sourcePriority?: number;
 }
 
 export interface ScrapedRestaurant {
@@ -19,7 +41,7 @@ export interface ScrapedRestaurant {
   openingDate?: Date;
   sourceUrl: string;
   cuisine?: string;
-  status: 'opening_soon' | 'newly_opened' | 'announced';
+  status: OpeningStatus;
 }
 
 export async function scrapeGoogleEvents(query: string = "events in Des Moines Iowa"): Promise<ScrapedEvent[]> {
@@ -447,7 +469,7 @@ async function scrapeGenericVenue(url: string, venueName: string, category: stri
 }
 
 // Restaurant scraper for DSM Magazine
-export async function scrapeDSMMagazineRestaurants(): Promise<ScrapedRestaurant[]> {
+async function scrapeDSMMagazineSearch(searchUrl: string): Promise<ScrapedRestaurant[]> {
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -460,7 +482,7 @@ export async function scrapeDSMMagazineRestaurants(): Promise<ScrapedRestaurant[
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     
     // Search for recent restaurant articles
-    await page.goto('https://dsmmagazine.com/?s=new+restaurant+opening', { waitUntil: 'networkidle2' });
+    await page.goto(searchUrl, { waitUntil: 'networkidle2' });
 
     const restaurants = await page.evaluate(() => {
       const articles = document.querySelectorAll('article, .post, .entry');
@@ -498,7 +520,7 @@ export async function scrapeDSMMagazineRestaurants(): Promise<ScrapedRestaurant[
                 location: 'Des Moines, IA',
                 openingDate,
                 sourceUrl: url ? (url.startsWith('http') ? url : `https://dsmmagazine.com${url}`) : '',
-                status: 'newly_opened'
+                status: 'newly_opened' // refined from the headline after extraction
               });
             }
           }
@@ -522,7 +544,7 @@ export async function scrapeDSMMagazineRestaurants(): Promise<ScrapedRestaurant[
 }
 
 // Restaurant scraper for Des Moines Register
-export async function scrapeDesMoinesRegisterRestaurants(): Promise<ScrapedRestaurant[]> {
+async function scrapeRegisterSearch(searchUrl: string): Promise<ScrapedRestaurant[]> {
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -535,7 +557,7 @@ export async function scrapeDesMoinesRegisterRestaurants(): Promise<ScrapedResta
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     
     // Search for recent restaurant articles
-    await page.goto('https://www.desmoinesregister.com/search/?q=new%20restaurant%20des%20moines', { waitUntil: 'networkidle2' });
+    await page.goto(searchUrl, { waitUntil: 'networkidle2' });
 
     const restaurants = await page.evaluate(() => {
       const articles = document.querySelectorAll('article, .gnt_se_a, .search-result');
@@ -563,7 +585,7 @@ export async function scrapeDesMoinesRegisterRestaurants(): Promise<ScrapedResta
                 location: 'Des Moines, IA',
                 openingDate: new Date(),
                 sourceUrl: url ? (url.startsWith('http') ? url : `https://www.desmoinesregister.com${url}`) : '',
-                status: 'newly_opened'
+                status: 'newly_opened' // refined from the headline after extraction
               });
             }
           }
@@ -587,88 +609,237 @@ export async function scrapeDesMoinesRegisterRestaurants(): Promise<ScrapedResta
 }
 
 // Event deduplication utility
-export function deduplicateEvents(existingEvents: ScrapedEvent[], newEvents: ScrapedEvent[]): ScrapedEvent[] {
-  const uniqueEvents: ScrapedEvent[] = [];
-  
-  for (const newEvent of newEvents) {
-    const isDuplicate = existingEvents.some(existing => 
-      existing.title.toLowerCase() === newEvent.title.toLowerCase() &&
-      Math.abs(existing.date.getTime() - newEvent.date.getTime()) < 24 * 60 * 60 * 1000 && // Same day
-      existing.venue?.toLowerCase() === newEvent.venue?.toLowerCase()
-    );
-    
-    if (!isDuplicate) {
-      uniqueEvents.push(newEvent);
+/**
+ * Hosts that copy other people's events.
+ *
+ * Sending a reader to catchdesmoines.com when the venue has its own page is a
+ * worse link twice over: an extra click before they can buy a ticket, and a
+ * page that may already be out of date about a show the venue itself just
+ * rescheduled.
+ */
+const AGGREGATOR_HOSTS = [
+  "catchdesmoines.com",
+  "google.com",
+  "eventbrite.com",
+];
+
+export function isAggregatorUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return AGGREGATOR_HOSTS.some((known) => host === known || host.endsWith(`.${known}`));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * How much we trust an event, for choosing between two copies of the same one.
+ *
+ * An explicit rank from the source wins. Failing that the URL decides, which is
+ * what makes this work on events already in the database: those were stored
+ * before ranks existed and carry only a link, but a catchdesmoines.com link is
+ * all the evidence needed to know it should lose to a venue's own listing.
+ */
+export function eventPriority(event: ScrapedEvent): number {
+  if (typeof event.sourcePriority === "number") return event.sourcePriority;
+  return isAggregatorUrl(event.sourceUrl)
+    ? SOURCE_PRIORITY.AGGREGATOR
+    : SOURCE_PRIORITY.DIRECT_VENUE;
+}
+
+/** Same event, listed twice? Same title, same venue, within a day. */
+function isSameEvent(a: ScrapedEvent, b: ScrapedEvent): boolean {
+  return (
+    a.title.trim().toLowerCase() === b.title.trim().toLowerCase() &&
+    Math.abs(a.date.getTime() - b.date.getTime()) < 24 * 60 * 60 * 1000 &&
+    (a.venue ?? "").trim().toLowerCase() === (b.venue ?? "").trim().toLowerCase()
+  );
+}
+
+/**
+ * Reduce a freshly scraped batch to the events worth storing.
+ *
+ * Two passes, and the first one is the one that was missing: the batch is
+ * deduplicated against itself. Twenty-five sources overlap heavily now — the
+ * tourism bureau lists the same touring musical the theatre does — and without
+ * this both copies were stored, so the site showed the show twice, once with a
+ * link to the box office and once with a link to the bureau.
+ *
+ * Where two copies match, the higher-ranked source wins outright. Ties are
+ * broken by keeping the one already held, so a run is stable: scraping twice
+ * with nothing changed produces the same result.
+ */
+export function deduplicateEvents(
+  existingEvents: ScrapedEvent[],
+  newEvents: ScrapedEvent[],
+): ScrapedEvent[] {
+  const best: ScrapedEvent[] = [];
+
+  for (const candidate of newEvents) {
+    const index = best.findIndex((kept) => isSameEvent(kept, candidate));
+    if (index < 0) {
+      best.push(candidate);
+      continue;
+    }
+    if (eventPriority(candidate) > eventPriority(best[index])) {
+      best[index] = candidate;
     }
   }
-  
-  return uniqueEvents;
+
+  // Then against what is already stored. An event we already have is skipped,
+  // unless the new copy comes from a better source than the stored one did --
+  // that is an upgrade from an aggregator's link to the venue's own, and it is
+  // worth taking.
+  return best.filter((candidate) => {
+    const stored = existingEvents.find((existing) => isSameEvent(existing, candidate));
+    if (!stored) return true;
+    return eventPriority(candidate) > eventPriority(stored);
+  });
 }
 
 // Master scraping function
+/**
+ * Search a source for both openings and closings.
+ *
+ * Two passes rather than one because the sites index them under different
+ * language. Each item's status is then read from its own headline, since a
+ * single search returns a mix: a "new restaurants" page still surfaces
+ * "X has closed" stories.
+ */
+async function searchBoth(
+  scrape: (url: string) => Promise<ScrapedRestaurant[]>,
+  openingUrl: string,
+  closingUrl: string,
+): Promise<ScrapedRestaurant[]> {
+  const results: ScrapedRestaurant[] = [];
+
+  for (const url of [openingUrl, closingUrl]) {
+    try {
+      const batch = await scrape(url);
+      for (const item of batch) {
+        const status = classifyOpeningStatus(item.name, item.description);
+        // An item whose headline says nothing useful is dropped rather than
+        // filed under a status we guessed.
+        if (!status) continue;
+        results.push({ ...item, status });
+      }
+    } catch (error) {
+      console.error(`Restaurant search failed for ${url}:`, error);
+    }
+  }
+
+  return results;
+}
+
+export async function scrapeDSMMagazineRestaurants(): Promise<ScrapedRestaurant[]> {
+  return searchBoth(
+    scrapeDSMMagazineSearch,
+    'https://dsmmagazine.com/?s=new+restaurant+opening',
+    'https://dsmmagazine.com/?s=restaurant+closing',
+  );
+}
+
+export async function scrapeDesMoinesRegisterRestaurants(): Promise<ScrapedRestaurant[]> {
+  return searchBoth(
+    scrapeRegisterSearch,
+    'https://www.desmoinesregister.com/search/?q=new%20restaurant%20des%20moines',
+    'https://www.desmoinesregister.com/search/?q=restaurant%20closing%20des%20moines',
+  );
+}
+
 export async function scrapeAllSources(): Promise<{
   events: ScrapedEvent[];
   restaurants: ScrapedRestaurant[];
+  runs: SourceRunResult[];
 }> {
   console.log('Starting comprehensive scraping of all sources...');
-  
-  const allEvents: ScrapedEvent[] = [];
+
+  // Venue scrapers live in ./scrapers, one file per source, and the runner
+  // there handles concurrency and per-source failure. The sources below are the
+  // ones that are not tied to a single venue: search aggregators and the
+  // restaurant-opening trawl through local news.
+  const { events: venueEvents, runs } = await scrapeSources();
+
+  const allEvents: ScrapedEvent[] = [...venueEvents];
   const allRestaurants: ScrapedRestaurant[] = [];
-  
-  try {
-    // Scrape events from all sources
-    const eventSources = [
-      { name: 'Google Events', scraper: () => scrapeGoogleEvents() },
-      { name: 'Catch Des Moines', scraper: () => scrapeCatchDesMoinesWithDirectLinks() },
-      { name: 'Eventbrite', scraper: () => scrapeEventbrite() },
-      { name: 'Vibrant Music Hall', scraper: () => scrapeVibrantMusicHall() },
-      { name: 'Hoyt Sherman', scraper: () => scrapeHoytSherman() },
-      { name: 'Val Aire Ballroom', scraper: () => scrapeValAireBallroom() },
-      { name: 'Iowa Wild', scraper: () => scrapeIowaWild() },
-      { name: 'Iowa Wolves', scraper: () => scrapeIowaWolves() },
-      { name: 'Iowa Cubs', scraper: () => scrapeIowaCubs() },
-      { name: 'Iowa Barnstormers', scraper: () => scrapeIowaBarnstormers() },
-      { name: 'Iowa Events Center', scraper: () => scrapeIowaEventsCenter() },
-    ];
-    
-    for (const source of eventSources) {
-      try {
-        console.log(`Scraping ${source.name}...`);
-        const events = await source.scraper();
-        allEvents.push(...events);
-        console.log(`Found ${events.length} events from ${source.name}`);
-      } catch (error) {
-        console.error(`Failed to scrape ${source.name}:`, error);
-      }
-    }
-    
-    // Scrape restaurants
+
+  // Catch Des Moines is no longer here: it moved into ./scrapers as a ranked
+  // fallback source that reads their RSS feed instead of driving a browser
+  // through their calendar. Google search results stay, ranked as an
+  // aggregator, because they still reach events nothing else does.
+  const legacySources = [
+    { name: 'Google Events', priority: SOURCE_PRIORITY.AGGREGATOR, scraper: () => scrapeGoogleEvents() },
+    { name: 'Eventbrite', priority: SOURCE_PRIORITY.AGGREGATOR, scraper: () => scrapeEventbrite() },
+    { name: 'Vibrant Music Hall', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeVibrantMusicHall() },
+    { name: 'Hoyt Sherman', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeHoytSherman() },
+    { name: 'Val Aire Ballroom', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeValAireBallroom() },
+    { name: 'Iowa Wild', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeIowaWild() },
+    { name: 'Iowa Wolves', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeIowaWolves() },
+    { name: 'Iowa Cubs', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeIowaCubs() },
+    { name: 'Iowa Barnstormers', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeIowaBarnstormers() },
+    { name: 'Iowa Events Center', priority: SOURCE_PRIORITY.DIRECT_VENUE, scraper: () => scrapeIowaEventsCenter() },
+  ];
+
+  for (const source of legacySources) {
+    const startedAt = Date.now();
     try {
-      console.log('Scraping DSM Magazine restaurants...');
-      const dsmRestaurants = await scrapeDSMMagazineRestaurants();
-      allRestaurants.push(...dsmRestaurants);
-      console.log(`Found ${dsmRestaurants.length} restaurants from DSM Magazine`);
+      const events = (await source.scraper()).map((event) => ({
+        ...event,
+        sourcePriority: event.sourcePriority ?? source.priority,
+      }));
+      allEvents.push(...events);
+      runs.push({
+        source: source.name,
+        ok: true,
+        count: events.length,
+        durationMs: Date.now() - startedAt,
+      });
     } catch (error) {
-      console.error('Failed to scrape DSM Magazine restaurants:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to scrape ${source.name}:`, message);
+      runs.push({
+        source: source.name,
+        ok: false,
+        count: 0,
+        durationMs: Date.now() - startedAt,
+        error: message.slice(0, 500),
+      });
     }
-    
-    try {
-      console.log('Scraping Des Moines Register restaurants...');
-      const registerRestaurants = await scrapeDesMoinesRegisterRestaurants();
-      allRestaurants.push(...registerRestaurants);
-      console.log(`Found ${registerRestaurants.length} restaurants from Des Moines Register`);
-    } catch (error) {
-      console.error('Failed to scrape Des Moines Register restaurants:', error);
-    }
-    
-  } catch (error) {
-    console.error('Error during comprehensive scraping:', error);
   }
-  
-  console.log(`Comprehensive scraping complete. Found ${allEvents.length} total events and ${allRestaurants.length} restaurants.`);
-  
-  return {
-    events: allEvents,
-    restaurants: allRestaurants
-  };
+
+  const restaurantSources = [
+    { name: 'DSM Magazine restaurants', scraper: () => scrapeDSMMagazineRestaurants() },
+    { name: 'Des Moines Register restaurants', scraper: () => scrapeDesMoinesRegisterRestaurants() },
+  ];
+
+  for (const source of restaurantSources) {
+    const startedAt = Date.now();
+    try {
+      const restaurants = await source.scraper();
+      allRestaurants.push(...restaurants);
+      runs.push({
+        source: source.name,
+        ok: true,
+        count: restaurants.length,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to scrape ${source.name}:`, message);
+      runs.push({
+        source: source.name,
+        ok: false,
+        count: 0,
+        durationMs: Date.now() - startedAt,
+        error: message.slice(0, 500),
+      });
+    }
+  }
+
+  console.log(
+    `Comprehensive scraping complete. Found ${allEvents.length} total events and ${allRestaurants.length} restaurants.`,
+  );
+
+  return { events: allEvents, restaurants: allRestaurants, runs };
 }
