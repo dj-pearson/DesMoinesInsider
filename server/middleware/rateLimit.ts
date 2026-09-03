@@ -62,3 +62,17 @@ export const newsletterLimiter = rateLimit({
   keyGenerator: clientKey,
   handler: tooMany,
 });
+
+/**
+ * Community submissions. Tighter than the general write budget because each one
+ * creates a row a human then has to review; a flood is a denial of service on
+ * the moderator, not just the server.
+ */
+export const submissionLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: clientKey,
+  handler: tooMany,
+});

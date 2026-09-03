@@ -1,7 +1,7 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Baby, Calendar, Footprints, Home, MapPin, Ticket } from "lucide-react";
+import { Baby, Calendar, Footprints, Home, MapPin, Ticket, Users } from "lucide-react";
 import { Event } from "@shared/schema";
 import { format } from "date-fns";
 
@@ -54,7 +54,7 @@ export default function EventCard({ event }: EventCardProps) {
         {/* Only true flags show. An unknown flag stays silent rather than
             rendering as a confident negative. */}
         {(event.isFree || event.isKidFriendly || event.isIndoor ||
-          event.isSkywalkAccessible) && (
+          event.isSkywalkAccessible || event.source === "community") && (
           <div className="flex flex-wrap gap-1.5 mb-3">
             {event.isFree && (
               <Badge variant="secondary" className="text-xs font-medium">
@@ -72,6 +72,12 @@ export default function EventCard({ event }: EventCardProps) {
               <Badge variant="secondary" className="text-xs font-medium">
                 <Home className="h-3 w-3 mr-1" />
                 Indoor
+              </Badge>
+            )}
+            {event.source === "community" && (
+              <Badge variant="secondary" className="text-xs font-medium">
+                <Users className="h-3 w-3 mr-1" />
+                Community submitted
               </Badge>
             )}
             {event.isSkywalkAccessible && (

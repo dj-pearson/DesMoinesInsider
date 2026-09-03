@@ -15,6 +15,8 @@ import GuidePage from "@/pages/guide";
 import OpeningsPage from "@/pages/openings";
 import OpeningPage from "@/pages/opening";
 import FamilyPage from "@/pages/family";
+import SubmitPage from "@/pages/submit";
+import AdminSubmissionsPage from "@/pages/admin-submissions";
 
 function Router() {
   return (
@@ -23,6 +25,8 @@ function Router() {
       <Route path="/events/:slug" component={EventPage} />
       <Route path="/this-weekend" component={ThisWeekendPage} />
       <Route path="/family" component={FamilyPage} />
+      <Route path="/submit" component={SubmitPage} />
+      <Route path="/admin/submissions" component={AdminSubmissionsPage} />
       <Route path="/openings" component={OpeningsPage} />
       <Route path="/openings/:slug" component={OpeningPage} />
       <Route path="/guides" component={GuidesPage} />

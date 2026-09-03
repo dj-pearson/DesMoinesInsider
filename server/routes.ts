@@ -3,7 +3,11 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage.js";
 import { scrapeAllSources, deduplicateEvents } from "./services/scraper.js";
 import { enhanceEvents } from "./services/eventEnhancer.js";
-import { insertNewsletterSchema, insertRestaurantOpeningSchema } from "@shared/schema.js";
+import {
+  insertEventSubmissionSchema,
+  insertNewsletterSchema,
+  insertRestaurantOpeningSchema,
+} from "@shared/schema.js";
 import cron from "node-cron";
 import {
   getTonightRange,
@@ -23,6 +27,7 @@ import {
   apiWriteLimiter,
   expensiveOperationLimiter,
   newsletterLimiter,
+  submissionLimiter,
 } from "./middleware/rateLimit.js";
 
 /**
@@ -497,6 +502,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to create restaurant opening:", error);
       res.status(500).json({ message: "Failed to create restaurant opening" });
+    }
+  });
+
+  // Community submissions
+  app.post("/api/submissions", submissionLimiter, async (req, res) => {
+    try {
+      // Honeypot: a field hidden from people but filled in by naive bots.
+      // Answer 200 so a bot cannot tell it was caught and retry differently.
+      if (typeof req.body?.website === "string" && req.body.website.trim() !== "") {
+        console.warn("[submissions] Honeypot triggered; discarding.");
+        return res.json({ message: "Thanks. We will take a look." });
+      }
+
+      const result = insertEventSubmissionSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({
+          message: "Please check the form",
+          issues: result.error.issues.map((issue) => ({
+            field: issue.path.join("."),
+            message: issue.message,
+          })),
+        });
+      }
+
+      // Nothing here is published. A reviewer decides.
+      await storage.createSubmission(result.data);
+      res.json({ message: "Thanks. We will take a look." });
+    } catch (error) {
+      console.error("Failed to record submission:", error);
+      res.status(500).json({ message: "Could not record your submission" });
+    }
+  });
+
+  app.get("/api/submissions", requireAdmin, async (req, res) => {
+    try {
+      const status = typeof req.query.status === "string" ? req.query.status : undefined;
+      res.json(await storage.getSubmissions(status));
+    } catch (error) {
+      console.error("Failed to list submissions:", error);
+      res.status(500).json({ message: "Could not list submissions" });
+    }
+  });
+
+  app.post("/api/submissions/:id/approve", requireAdmin, async (req, res) => {
+    try {
+      const submission = await storage.getSubmission(req.params.id);
+      if (!submission) return res.status(404).json({ message: "Not found" });
+      if (submission.status !== "pending") {
+        return res.status(409).json({ message: `Already ${submission.status}` });
+      }
+
+      // Approved submissions go through the same enhancement path as scraped
+      // events, so they get the same categories, flags and venue linking.
+      const [enhanced] = await enhanceEvents(
+        [
+          {
+            title: submission.title,
+            description: submission.description,
+            date: submission.date,
+            location: submission.location,
+            category: submission.category,
+            sourceUrl: submission.sourceUrl ?? "",
+            imageUrl: submission.imageUrl ?? undefined,
+            venue: submission.venue ?? undefined,
+            price: submission.price ?? undefined,
+          },
+        ],
+        "community",
+      );
+
+      const [published] = await storage.createEvents([enhanced]);
+      await storage.markSubmissionReviewed(submission.id, "approved", published.id);
+
+      res.json({ message: "Published", event: published });
+    } catch (error) {
+      console.error("Failed to approve submission:", error);
+      res.status(500).json({ message: "Could not approve submission" });
+    }
+  });
+
+  app.post("/api/submissions/:id/reject", requireAdmin, async (req, res) => {
+    try {
+      const submission = await storage.markSubmissionReviewed(req.params.id, "rejected");
+      if (!submission) return res.status(404).json({ message: "Not found" });
+      res.json({ message: "Rejected" });
+    } catch (error) {
+      console.error("Failed to reject submission:", error);
+      res.status(500).json({ message: "Could not reject submission" });
     }
   });
 

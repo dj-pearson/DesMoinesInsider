@@ -297,6 +297,37 @@ export const restaurantOpenings = pgTable("restaurant_openings", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/**
+ * Events submitted by venues, organizers and residents.
+ *
+ * Held separately from `events` and reviewed before publication. This is the
+ * table that lets in the taco truck and the block party, which a
+ * membership-based listing never carries, without letting anyone write directly
+ * to the public site.
+ */
+export const SUBMISSION_STATUSES = ["pending", "approved", "rejected"] as const;
+export type SubmissionStatus = (typeof SUBMISSION_STATUSES)[number];
+
+export const eventSubmissions = pgTable("event_submissions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  date: timestamp("date").notNull(),
+  location: text("location").notNull(),
+  venue: text("venue"),
+  category: text("category").notNull(),
+  price: text("price"),
+  sourceUrl: text("source_url"),
+  imageUrl: text("image_url"),
+  submitterName: text("submitter_name").notNull(),
+  submitterEmail: text("submitter_email").notNull(),
+  status: text("status").notNull().default("pending"),
+  reviewedAt: timestamp("reviewed_at"),
+  /** Set when approved, so a reviewer can find what it became. */
+  publishedEventId: varchar("published_event_id").references(() => events.id),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Insert schemas
 export const insertEventSchema = createInsertSchema(events)
   .omit({
@@ -371,6 +402,43 @@ export const insertVenueSchema = createInsertSchema(venues).omit({
   id: true,
 });
 
+/**
+ * What the public form accepts.
+ *
+ * Only http and https URLs: a submitted `javascript:` link would become a
+ * clickable anchor on a published page.
+ */
+const submittedUrl = z
+  .string()
+  .trim()
+  .max(2048)
+  .url()
+  .refine((value) => /^https?:\/\//i.test(value), {
+    message: "Links must start with http:// or https://",
+  });
+
+export const insertEventSubmissionSchema = createInsertSchema(eventSubmissions)
+  .omit({
+    id: true,
+    status: true,
+    reviewedAt: true,
+    publishedEventId: true,
+    createdAt: true,
+  })
+  .extend({
+    title: z.string().trim().min(3).max(200),
+    description: z.string().trim().min(10).max(2000),
+    location: z.string().trim().min(2).max(200),
+    venue: z.string().trim().max(200).optional().nullable(),
+    price: z.string().trim().max(100).optional().nullable(),
+    category: z.enum(EVENT_CATEGORIES),
+    sourceUrl: submittedUrl.optional().nullable(),
+    imageUrl: submittedUrl.optional().nullable(),
+    submitterName: z.string().trim().min(2).max(120),
+    submitterEmail: z.string().trim().email().max(320),
+    date: z.coerce.date(),
+  });
+
 // Types
 export type Neighborhood = typeof neighborhoods.$inferSelect;
 
@@ -385,6 +453,9 @@ export interface NearbyEat {
   name: string;
   note: string;
 }
+
+export type EventSubmission = typeof eventSubmissions.$inferSelect;
+export type InsertEventSubmission = z.infer<typeof insertEventSubmissionSchema>;
 
 export type Venue = typeof venues.$inferSelect;
 export type InsertVenue = z.infer<typeof insertVenueSchema>;

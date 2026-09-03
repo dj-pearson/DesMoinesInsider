@@ -1,6 +1,7 @@
 import {
   attractions,
   events,
+  eventSubmissions,
   neighborhoods,
   tentpoles,
   venues,
@@ -11,8 +12,10 @@ import {
   users,
   type Attraction,
   type Event,
+  type EventSubmission,
   type InsertAttraction,
   type InsertEvent,
+  type InsertEventSubmission,
   type InsertNeighborhood,
   type InsertNewsletterSubscription,
   type InsertPlayground,
@@ -90,6 +93,16 @@ export interface TentpoleWithEvents {
 }
 
 export interface IStorage {
+  // Community submissions
+  createSubmission(submission: InsertEventSubmission): Promise<EventSubmission>;
+  getSubmissions(status?: string): Promise<EventSubmission[]>;
+  getSubmission(id: string): Promise<EventSubmission | undefined>;
+  markSubmissionReviewed(
+    id: string,
+    status: "approved" | "rejected",
+    publishedEventId?: string | null,
+  ): Promise<EventSubmission | undefined>;
+
   // Venues
   getVenueById(id: string): Promise<Venue | undefined>;
 
@@ -231,6 +244,47 @@ export class DatabaseStorage implements IStorage {
     const slug = classifyNeighborhoodSlug(input);
     if (!slug) return null;
     return (await this.neighborhoodIds()).get(slug) ?? null;
+  }
+
+  // Community submissions
+  async createSubmission(submission: InsertEventSubmission): Promise<EventSubmission> {
+    const [created] = await this.db
+      .insert(eventSubmissions)
+      .values(submission)
+      .returning();
+    return created;
+  }
+
+  async getSubmissions(status?: string): Promise<EventSubmission[]> {
+    const query = this.db
+      .select()
+      .from(eventSubmissions)
+      .orderBy(desc(eventSubmissions.createdAt));
+    return status
+      ? query.where(eq(eventSubmissions.status, status))
+      : query;
+  }
+
+  async getSubmission(id: string): Promise<EventSubmission | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(eventSubmissions)
+      .where(eq(eventSubmissions.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async markSubmissionReviewed(
+    id: string,
+    status: "approved" | "rejected",
+    publishedEventId?: string | null,
+  ): Promise<EventSubmission | undefined> {
+    const [row] = await this.db
+      .update(eventSubmissions)
+      .set({ status, reviewedAt: new Date(), publishedEventId: publishedEventId ?? null })
+      .where(eq(eventSubmissions.id, id))
+      .returning();
+    return row;
   }
 
   // Venues
@@ -1294,6 +1348,56 @@ export class MemStorage implements IStorage {
 
   private tentpoles: Map<string, Tentpole> = new Map();
   private venues: Map<string, Venue> = new Map();
+  private submissions: Map<string, EventSubmission> = new Map();
+
+  // Community submissions
+  async createSubmission(submission: InsertEventSubmission): Promise<EventSubmission> {
+    const id = randomUUID();
+    const row: EventSubmission = {
+      ...submission,
+      id,
+      venue: submission.venue ?? null,
+      price: submission.price ?? null,
+      sourceUrl: submission.sourceUrl ?? null,
+      imageUrl: submission.imageUrl ?? null,
+      status: "pending",
+      reviewedAt: null,
+      publishedEventId: null,
+      createdAt: new Date(),
+    };
+    this.submissions.set(id, row);
+    return row;
+  }
+
+  async getSubmissions(status?: string): Promise<EventSubmission[]> {
+    return Array.from(this.submissions.values())
+      .filter((row) => !status || row.status === status)
+      .sort(
+        (a, b) =>
+          (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0),
+      );
+  }
+
+  async getSubmission(id: string): Promise<EventSubmission | undefined> {
+    return this.submissions.get(id);
+  }
+
+  async markSubmissionReviewed(
+    id: string,
+    status: "approved" | "rejected",
+    publishedEventId?: string | null,
+  ): Promise<EventSubmission | undefined> {
+    const row = this.submissions.get(id);
+    if (!row) return undefined;
+    const updated: EventSubmission = {
+      ...row,
+      status,
+      reviewedAt: new Date(),
+      publishedEventId: publishedEventId ?? null,
+    };
+    this.submissions.set(id, updated);
+    return updated;
+  }
 
   // Venues
   async getVenueById(id: string): Promise<Venue | undefined> {

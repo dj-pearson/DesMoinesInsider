@@ -444,7 +444,7 @@
         "Footer links to `/submit` as 'Add your event'.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-017",

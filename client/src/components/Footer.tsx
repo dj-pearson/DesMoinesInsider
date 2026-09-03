@@ -44,6 +44,7 @@ export default function Footer() {
           <div>
             <h5 className="font-semibold mb-4">Contact</h5>
             <ul className="space-y-2 text-neutral-400">
+              <li><a href="/submit" className="hover:text-white transition-colors">Add your event</a></li>
               <li><a href="#about" className="hover:text-white transition-colors">About Us</a></li>
               <li><a href="#" className="hover:text-white transition-colors">Contact</a></li>
               <li><a href="#" className="hover:text-white transition-colors">Submit Event</a></li>
