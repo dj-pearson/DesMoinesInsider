@@ -11,15 +11,15 @@ import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { useSeo } from "@/lib/seo";
 import { useToast } from "@/hooks/use-toast";
-import { Event } from "@shared/schema";
+import { Attraction, Event, Playground, Restaurant } from "@shared/schema";
 import { Calendar, MapPin, Search as SearchIcon } from "lucide-react";
 import { format } from "date-fns";
 
 interface SearchResults {
   events: Event[];
-  restaurants: any[];
-  attractions: any[];
-  playgrounds: any[];
+  restaurants: Restaurant[];
+  attractions: Attraction[];
+  playgrounds: Playground[];
 }
 
 export default function Home() {
@@ -172,15 +172,16 @@ export default function Home() {
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {searchResults.restaurants.map((restaurant) => (
-                    <div
+                    <Link
                       key={restaurant.id}
-                      className="bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
+                      href={restaurant.slug ? `/restaurants/${restaurant.slug}` : "#"}
+                      className="block bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
                     >
                       <h5 className="text-lg font-semibold text-neutral-900 mb-2">
                         {restaurant.name}
                       </h5>
                       <p className="text-sm text-neutral-600">{restaurant.cuisine}</p>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </div>
@@ -194,15 +195,16 @@ export default function Home() {
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {searchResults.attractions.map((attraction) => (
-                    <div
+                    <Link
                       key={attraction.id}
-                      className="bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
+                      href={attraction.slug ? `/attractions/${attraction.slug}` : "#"}
+                      className="block bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
                     >
                       <h5 className="text-lg font-semibold text-neutral-900 mb-2">
                         {attraction.name}
                       </h5>
                       <p className="text-sm text-neutral-600">{attraction.type}</p>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </div>
@@ -216,15 +218,16 @@ export default function Home() {
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {searchResults.playgrounds.map((playground) => (
-                    <div
+                    <Link
                       key={playground.id}
-                      className="bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
+                      href={playground.slug ? `/playgrounds/${playground.slug}` : "#"}
+                      className="block bg-white border border-neutral-200 rounded-lg p-4 hover:shadow-lg transition-shadow"
                     >
                       <h5 className="text-lg font-semibold text-neutral-900 mb-2">
                         {playground.name}
                       </h5>
                       <p className="text-sm text-neutral-600">{playground.features}</p>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </div>

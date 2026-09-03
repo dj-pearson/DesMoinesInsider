@@ -64,3 +64,13 @@ export function ensureUniqueSlug(desired: string, taken: Set<string>): string {
   }
   return `${desired}-${suffix}`;
 }
+
+/**
+ * Build the slug for a place (restaurant, attraction, playground).
+ *
+ * Unlike events these are not dated: a restaurant has one page that stays at
+ * one URL, so the name alone is the identity.
+ */
+export function buildPlaceSlug(name: string): string {
+  return slugify(name) || "place";
+}

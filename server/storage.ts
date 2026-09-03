@@ -22,7 +22,7 @@ import {
   type User,
 } from "@shared/schema";
 import { and, asc, desc, eq, gte, ilike, isNull, or, sql } from "drizzle-orm";
-import { buildEventSlug, ensureUniqueSlug } from "@shared/slug";
+import { buildEventSlug, buildPlaceSlug, ensureUniqueSlug } from "@shared/slug";
 import { randomUUID } from "crypto";
 import { getDb, isDatabaseConfigured } from "./db";
 import {
@@ -43,18 +43,21 @@ export interface IStorage {
 
   // Restaurants
   getRestaurants(): Promise<Restaurant[]>;
+  getRestaurantBySlug(slug: string): Promise<Restaurant | undefined>;
   getTopRestaurants(limit?: number): Promise<Restaurant[]>;
   createRestaurant(restaurant: InsertRestaurant): Promise<Restaurant>;
   incrementRestaurantSearch(id: string): Promise<void>;
 
   // Attractions
   getAttractions(): Promise<Attraction[]>;
+  getAttractionBySlug(slug: string): Promise<Attraction | undefined>;
   getTopAttractions(limit?: number): Promise<Attraction[]>;
   createAttraction(attraction: InsertAttraction): Promise<Attraction>;
   incrementAttractionSearch(id: string): Promise<void>;
 
   // Playgrounds
   getPlaygrounds(): Promise<Playground[]>;
+  getPlaygroundBySlug(slug: string): Promise<Playground | undefined>;
   getTopPlaygrounds(limit?: number): Promise<Playground[]>;
   createPlayground(playground: InsertPlayground): Promise<Playground>;
   incrementPlaygroundSearch(id: string): Promise<void>;
@@ -78,6 +81,9 @@ export interface IStorage {
 
   /** Give any event still missing a slug one. Safe to call repeatedly. */
   backfillEventSlugs(): Promise<number>;
+
+  /** Give any restaurant, attraction or playground missing a slug one. */
+  backfillPlaceSlugs(): Promise<number>;
 }
 
 /** Filter sentinels the client sends when a dropdown is left on its default. */
@@ -136,6 +142,55 @@ export class DatabaseStorage implements IStorage {
   private async takenSlugs(): Promise<Set<string>> {
     const rows = await this.db.select({ slug: events.slug }).from(events);
     return new Set(rows.map((row) => row.slug).filter((slug): slug is string => Boolean(slug)));
+  }
+
+  /**
+   * Reserve a free slug for a place. The three place tables are structurally
+   * identical for this purpose, so one helper serves all of them.
+   */
+  private async freePlaceSlug(
+    table: typeof restaurants | typeof attractions | typeof playgrounds,
+    name: string,
+  ): Promise<string> {
+    const rows = await this.db.select({ slug: table.slug }).from(table);
+    const taken = new Set(
+      rows.map((row) => row.slug).filter((slug): slug is string => Boolean(slug)),
+    );
+    return ensureUniqueSlug(buildPlaceSlug(name), taken);
+  }
+
+  /** Fill in slugs for one place table. Returns how many rows were updated. */
+  private async backfillPlaceTable(
+    table: typeof restaurants | typeof attractions | typeof playgrounds,
+  ): Promise<number> {
+    const missing = await this.db
+      .select({ id: table.id, name: table.name })
+      .from(table)
+      .where(or(isNull(table.slug), eq(table.slug, "")));
+
+    if (missing.length === 0) return 0;
+
+    const rows = await this.db.select({ slug: table.slug }).from(table);
+    const taken = new Set(
+      rows.map((row) => row.slug).filter((slug): slug is string => Boolean(slug)),
+    );
+
+    for (const row of missing) {
+      const slug = ensureUniqueSlug(buildPlaceSlug(row.name), taken);
+      taken.add(slug);
+      await this.db.update(table).set({ slug }).where(eq(table.id, row.id));
+    }
+
+    return missing.length;
+  }
+
+  async backfillPlaceSlugs(): Promise<number> {
+    const counts = await Promise.all([
+      this.backfillPlaceTable(restaurants),
+      this.backfillPlaceTable(attractions),
+      this.backfillPlaceTable(playgrounds),
+    ]);
+    return counts.reduce((total, count) => total + count, 0);
   }
 
   async createEvent(event: InsertEvent): Promise<Event> {
@@ -199,8 +254,21 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
+  async getRestaurantBySlug(slug: string): Promise<Restaurant | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(restaurants)
+      .where(eq(restaurants.slug, slug))
+      .limit(1);
+    return row;
+  }
+
   async createRestaurant(restaurant: InsertRestaurant): Promise<Restaurant> {
-    const [created] = await this.db.insert(restaurants).values(restaurant).returning();
+    const slug = await this.freePlaceSlug(restaurants, restaurant.name);
+    const [created] = await this.db
+      .insert(restaurants)
+      .values({ ...restaurant, slug })
+      .returning();
     return created;
   }
 
@@ -224,8 +292,21 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
+  async getAttractionBySlug(slug: string): Promise<Attraction | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(attractions)
+      .where(eq(attractions.slug, slug))
+      .limit(1);
+    return row;
+  }
+
   async createAttraction(attraction: InsertAttraction): Promise<Attraction> {
-    const [created] = await this.db.insert(attractions).values(attraction).returning();
+    const slug = await this.freePlaceSlug(attractions, attraction.name);
+    const [created] = await this.db
+      .insert(attractions)
+      .values({ ...attraction, slug })
+      .returning();
     return created;
   }
 
@@ -249,8 +330,21 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
+  async getPlaygroundBySlug(slug: string): Promise<Playground | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(playgrounds)
+      .where(eq(playgrounds.slug, slug))
+      .limit(1);
+    return row;
+  }
+
   async createPlayground(playground: InsertPlayground): Promise<Playground> {
-    const [created] = await this.db.insert(playgrounds).values(playground).returning();
+    const slug = await this.freePlaceSlug(playgrounds, playground.name);
+    const [created] = await this.db
+      .insert(playgrounds)
+      .values({ ...playground, slug })
+      .returning();
     return created;
   }
 
@@ -454,10 +548,28 @@ export class MemStorage implements IStorage {
       .slice(0, limit);
   }
 
+  async getRestaurantBySlug(slug: string): Promise<Restaurant | undefined> {
+    return Array.from(this.restaurants.values()).find((row) => row.slug === slug);
+  }
+
+  /** Free slug for a place, checked against the names already in that map. */
+  private freePlaceSlug(
+    existing: Iterable<{ slug: string | null }>,
+    name: string,
+  ): string {
+    const taken = new Set(
+      Array.from(existing)
+        .map((row) => row.slug)
+        .filter((slug): slug is string => Boolean(slug)),
+    );
+    return ensureUniqueSlug(buildPlaceSlug(name), taken);
+  }
+
   async createRestaurant(insertRestaurant: InsertRestaurant): Promise<Restaurant> {
     const id = randomUUID();
     const restaurant: Restaurant = {
       ...insertRestaurant,
+      slug: this.freePlaceSlug(this.restaurants.values(), insertRestaurant.name),
       description: insertRestaurant.description ?? null,
       location: insertRestaurant.location ?? null,
       imageUrl: insertRestaurant.imageUrl ?? null,
@@ -488,10 +600,15 @@ export class MemStorage implements IStorage {
       .slice(0, limit);
   }
 
+  async getAttractionBySlug(slug: string): Promise<Attraction | undefined> {
+    return Array.from(this.attractions.values()).find((row) => row.slug === slug);
+  }
+
   async createAttraction(insertAttraction: InsertAttraction): Promise<Attraction> {
     const id = randomUUID();
     const attraction: Attraction = {
       ...insertAttraction,
+      slug: this.freePlaceSlug(this.attractions.values(), insertAttraction.name),
       description: insertAttraction.description ?? null,
       location: insertAttraction.location ?? null,
       imageUrl: insertAttraction.imageUrl ?? null,
@@ -521,10 +638,15 @@ export class MemStorage implements IStorage {
       .slice(0, limit);
   }
 
+  async getPlaygroundBySlug(slug: string): Promise<Playground | undefined> {
+    return Array.from(this.playgrounds.values()).find((row) => row.slug === slug);
+  }
+
   async createPlayground(insertPlayground: InsertPlayground): Promise<Playground> {
     const id = randomUUID();
     const playground: Playground = {
       ...insertPlayground,
+      slug: this.freePlaceSlug(this.playgrounds.values(), insertPlayground.name),
       description: insertPlayground.description ?? null,
       location: insertPlayground.location ?? null,
       imageUrl: insertPlayground.imageUrl ?? null,
@@ -631,6 +753,33 @@ export class MemStorage implements IStorage {
     for (const event of buildSeedEvents()) await this.createEvent(event);
   }
 
+  /**
+   * Fill in slugs for one place map. Generic over the row type so each of the
+   * three maps keeps its own element type instead of collapsing to a union.
+   */
+  private backfillPlaceMap<T extends { slug: string | null; name: string }>(
+    map: Map<string, T>,
+  ): number {
+    let filled = 0;
+
+    for (const [id, row] of Array.from(map.entries())) {
+      if (row.slug) continue;
+      const slug = this.freePlaceSlug(map.values(), row.name);
+      map.set(id, { ...row, slug });
+      filled += 1;
+    }
+
+    return filled;
+  }
+
+  async backfillPlaceSlugs(): Promise<number> {
+    return (
+      this.backfillPlaceMap(this.restaurants) +
+      this.backfillPlaceMap(this.attractions) +
+      this.backfillPlaceMap(this.playgrounds)
+    );
+  }
+
   async backfillEventSlugs(): Promise<number> {
     const taken = this.takenSlugs();
     let filled = 0;
@@ -680,10 +829,15 @@ export async function initializeStorage(): Promise<void> {
   try {
     await storage.seedIfEmpty();
 
-    // Rows written before the slug column existed still need a URL.
-    const filled = await storage.backfillEventSlugs();
-    if (filled > 0) {
-      console.log(`[storage] Backfilled slugs for ${filled} event(s).`);
+    // Rows written before the slug columns existed still need URLs.
+    const filledEvents = await storage.backfillEventSlugs();
+    if (filledEvents > 0) {
+      console.log(`[storage] Backfilled slugs for ${filledEvents} event(s).`);
+    }
+
+    const filledPlaces = await storage.backfillPlaceSlugs();
+    if (filledPlaces > 0) {
+      console.log(`[storage] Backfilled slugs for ${filledPlaces} place(s).`);
     }
   } catch (error) {
     console.error("Failed to initialize storage:", error);

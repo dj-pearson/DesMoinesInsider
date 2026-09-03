@@ -26,6 +26,9 @@ export const events = pgTable("events", {
 
 export const restaurants = pgTable("restaurants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // URL identity for this place's own page. Nullable so the column can be
+  // added to a populated table; application code always sets it.
+  slug: text("slug").unique(),
   name: text("name").notNull(),
   cuisine: text("cuisine").notNull(),
   rating: integer("rating").notNull(), // 1-5 scale
@@ -38,6 +41,9 @@ export const restaurants = pgTable("restaurants", {
 
 export const attractions = pgTable("attractions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // URL identity for this place's own page. Nullable so the column can be
+  // added to a populated table; application code always sets it.
+  slug: text("slug").unique(),
   name: text("name").notNull(),
   type: text("type").notNull(),
   description: text("description"),
@@ -48,6 +54,9 @@ export const attractions = pgTable("attractions", {
 
 export const playgrounds = pgTable("playgrounds", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // URL identity for this place's own page. Nullable so the column can be
+  // added to a populated table; application code always sets it.
+  slug: text("slug").unique(),
   name: text("name").notNull(),
   features: text("features").notNull(),
   description: text("description"),
@@ -90,14 +99,17 @@ export const insertEventSchema = createInsertSchema(events).omit({
 
 export const insertRestaurantSchema = createInsertSchema(restaurants).omit({
   id: true,
+  slug: true,
 });
 
 export const insertAttractionSchema = createInsertSchema(attractions).omit({
   id: true,
+  slug: true,
 });
 
 export const insertPlaygroundSchema = createInsertSchema(playgrounds).omit({
   id: true,
+  slug: true,
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({

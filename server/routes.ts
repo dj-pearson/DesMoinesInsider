@@ -177,6 +177,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Registered alongside /top so neither literal segment is read as a slug.
+  app.get("/api/restaurants/slug/:slug", async (req, res) => {
+    try {
+      const record = await storage.getRestaurantBySlug(req.params.slug);
+      if (!record) {
+        return res.status(404).json({ message: "Restaurant not found" });
+      }
+      res.json(record);
+    } catch (error) {
+      console.error("Failed to get restaurant by slug:", error);
+      res.status(500).json({ message: "Failed to fetch restaurant" });
+    }
+  });
+
   app.get("/api/restaurants/top", async (req, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 5;
@@ -209,6 +223,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Registered alongside /top so neither literal segment is read as a slug.
+  app.get("/api/attractions/slug/:slug", async (req, res) => {
+    try {
+      const record = await storage.getAttractionBySlug(req.params.slug);
+      if (!record) {
+        return res.status(404).json({ message: "Attraction not found" });
+      }
+      res.json(record);
+    } catch (error) {
+      console.error("Failed to get attraction by slug:", error);
+      res.status(500).json({ message: "Failed to fetch attraction" });
+    }
+  });
+
   app.get("/api/attractions/top", async (req, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 5;
@@ -238,6 +266,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to get playgrounds:", error);
       res.status(500).json({ message: "Failed to fetch playgrounds" });
+    }
+  });
+
+  // Registered alongside /top so neither literal segment is read as a slug.
+  app.get("/api/playgrounds/slug/:slug", async (req, res) => {
+    try {
+      const record = await storage.getPlaygroundBySlug(req.params.slug);
+      if (!record) {
+        return res.status(404).json({ message: "Playground not found" });
+      }
+      res.json(record);
+    } catch (error) {
+      console.error("Failed to get playground by slug:", error);
+      res.status(500).json({ message: "Failed to fetch playground" });
     }
   });
 

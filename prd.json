@@ -166,7 +166,7 @@
         "MostSearched and search-result cards link to these pages.",
         "`npm run check` passes."
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-005",
