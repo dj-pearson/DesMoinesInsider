@@ -352,6 +352,49 @@ export const eventSubmissions = pgTable("event_submissions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/**
+ * Short pieces of advice left by residents.
+ *
+ * A single table across every content type, because a tip is the same shape
+ * whatever it is attached to and one polymorphic table beats five near-identical
+ * ones. It is the layer no aggregator has: the person who has actually parked
+ * there telling you which ramp to use.
+ */
+export const TIP_TARGET_TYPES = [
+  "event",
+  "restaurant",
+  "attraction",
+  "playground",
+  "venue",
+] as const;
+export type TipTargetType = (typeof TIP_TARGET_TYPES)[number];
+
+export const TIP_STATUSES = ["visible", "hidden"] as const;
+export type TipStatus = (typeof TIP_STATUSES)[number];
+
+export const tips = pgTable(
+  "tips",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    targetType: text("target_type").notNull(),
+    targetId: varchar("target_id").notNull(),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id),
+    body: text("body").notNull(),
+    status: text("status").notNull().default("visible"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => ({
+    // One tip per person per thing, so a single voice cannot fill a page.
+    userTarget: unique("tips_user_target").on(
+      table.userId,
+      table.targetType,
+      table.targetId,
+    ),
+  }),
+);
+
 // Insert schemas
 export const insertEventSchema = createInsertSchema(events)
   .omit({
@@ -409,6 +452,13 @@ export const registerUserSchema = z.object({
 export const loginSchema = z.object({
   username: z.string().trim().min(1).max(320),
   password: z.string().min(1).max(200),
+});
+
+export const insertTipSchema = z.object({
+  targetType: z.enum(TIP_TARGET_TYPES),
+  targetId: z.string().uuid(),
+  // 280 characters keeps a tip a tip. Anything longer is a review.
+  body: z.string().trim().min(4).max(280),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -535,6 +585,17 @@ export type PublicUser = Pick<
 >;
 
 export type SavedEvent = typeof savedEvents.$inferSelect;
+
+export type Tip = typeof tips.$inferSelect;
+export type InsertTip = z.infer<typeof insertTipSchema>;
+
+/** A tip as the API returns it: the author's name, never their email. */
+export interface TipWithAuthor {
+  id: string;
+  body: string;
+  createdAt: Date | null;
+  authorUsername: string;
+}
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
 export type NewsletterSubscription = typeof newsletterSubscriptions.$inferSelect;

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import TipsList from "@/components/TipsList";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -274,6 +275,8 @@ export default function EventPage() {
             </p>
           </div>
         )}
+
+        <TipsList targetType="event" targetId={event.id} />
       </article>
 
       <Footer />

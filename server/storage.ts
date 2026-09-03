@@ -11,6 +11,7 @@ import {
   restaurants,
   users,
   savedEvents,
+  tips,
   type Attraction,
   type Event,
   type EventSubmission,
@@ -32,6 +33,9 @@ import {
   type RestaurantOpening,
   type User,
   type PublicUser,
+  type InsertTip,
+  type Tip,
+  type TipWithAuthor,
 } from "@shared/schema";
 import {
   and,
@@ -167,6 +171,13 @@ export interface IStorage {
   getUserByUsernameOrEmail(identifier: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   setHomeNeighborhood(userId: string, neighborhoodId: string | null): Promise<PublicUser | undefined>;
+
+  // Tips
+  createTip(userId: string, tip: InsertTip): Promise<Tip>;
+  /** Visible tips only. Hidden ones never reach a reader. */
+  getTips(targetType: string, targetId: string): Promise<TipWithAuthor[]>;
+  setTipStatus(id: string, status: "visible" | "hidden"): Promise<Tip | undefined>;
+  getUserTipFor(userId: string, targetType: string, targetId: string): Promise<Tip | undefined>;
 
   // Saved events
   saveEvent(userId: string, eventId: string): Promise<void>;
@@ -925,6 +936,69 @@ export class DatabaseStorage implements IStorage {
         homeNeighborhoodId: users.homeNeighborhoodId,
         createdAt: users.createdAt,
       });
+    return row;
+  }
+
+  // Tips
+  async createTip(userId: string, tip: InsertTip): Promise<Tip> {
+    const [created] = await this.db
+      .insert(tips)
+      .values({ ...tip, userId })
+      .returning();
+    return created;
+  }
+
+  async getTips(targetType: string, targetId: string): Promise<TipWithAuthor[]> {
+    const rows = await this.db
+      .select({
+        id: tips.id,
+        body: tips.body,
+        createdAt: tips.createdAt,
+        authorUsername: users.username,
+      })
+      .from(tips)
+      .innerJoin(users, eq(users.id, tips.userId))
+      .where(
+        and(
+          eq(tips.targetType, targetType),
+          eq(tips.targetId, targetId),
+          // Hidden tips are excluded here rather than filtered in the caller,
+          // so no route can accidentally publish moderated content.
+          eq(tips.status, "visible"),
+        ),
+      )
+      .orderBy(desc(tips.createdAt));
+    return rows;
+  }
+
+  async setTipStatus(
+    id: string,
+    status: "visible" | "hidden",
+  ): Promise<Tip | undefined> {
+    const [row] = await this.db
+      .update(tips)
+      .set({ status })
+      .where(eq(tips.id, id))
+      .returning();
+    return row;
+  }
+
+  async getUserTipFor(
+    userId: string,
+    targetType: string,
+    targetId: string,
+  ): Promise<Tip | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(tips)
+      .where(
+        and(
+          eq(tips.userId, userId),
+          eq(tips.targetType, targetType),
+          eq(tips.targetId, targetId),
+        ),
+      )
+      .limit(1);
     return row;
   }
 
@@ -1953,6 +2027,63 @@ export class MemStorage implements IStorage {
     this.users.set(userId, updated);
     const { passwordHash: _hash, ...rest } = updated;
     return rest;
+  }
+
+  // Tips
+  private tips: Map<string, Tip> = new Map();
+
+  async createTip(userId: string, tip: InsertTip): Promise<Tip> {
+    const id = randomUUID();
+    const row: Tip = {
+      ...tip,
+      id,
+      userId,
+      status: "visible",
+      createdAt: new Date(),
+    };
+    this.tips.set(id, row);
+    return row;
+  }
+
+  async getTips(targetType: string, targetId: string): Promise<TipWithAuthor[]> {
+    return Array.from(this.tips.values())
+      .filter(
+        (tip) =>
+          tip.targetType === targetType &&
+          tip.targetId === targetId &&
+          tip.status === "visible",
+      )
+      .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0))
+      .map((tip) => ({
+        id: tip.id,
+        body: tip.body,
+        createdAt: tip.createdAt,
+        authorUsername: this.users.get(tip.userId)?.username ?? "someone",
+      }));
+  }
+
+  async setTipStatus(
+    id: string,
+    status: "visible" | "hidden",
+  ): Promise<Tip | undefined> {
+    const tip = this.tips.get(id);
+    if (!tip) return undefined;
+    const updated = { ...tip, status };
+    this.tips.set(id, updated);
+    return updated;
+  }
+
+  async getUserTipFor(
+    userId: string,
+    targetType: string,
+    targetId: string,
+  ): Promise<Tip | undefined> {
+    return Array.from(this.tips.values()).find(
+      (tip) =>
+        tip.userId === userId &&
+        tip.targetType === targetType &&
+        tip.targetId === targetId,
+    );
   }
 
   // Saved events

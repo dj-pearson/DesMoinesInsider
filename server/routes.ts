@@ -7,6 +7,7 @@ import {
   insertEventSubmissionSchema,
   insertNewsletterSchema,
   insertRestaurantOpeningSchema,
+  insertTipSchema,
   loginSchema,
   registerUserSchema,
 } from "@shared/schema.js";
@@ -656,6 +657,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to unsave event:", error);
       res.status(500).json({ message: "Could not remove that event" });
+    }
+  });
+
+  // Resident tips
+  app.get("/api/tips/:targetType/:targetId", async (req, res) => {
+    try {
+      res.json(await storage.getTips(req.params.targetType, req.params.targetId));
+    } catch (error) {
+      console.error("Failed to load tips:", error);
+      res.status(500).json({ message: "Could not load tips" });
+    }
+  });
+
+  app.post("/api/tips", requireUser, submissionLimiter, async (req, res) => {
+    try {
+      const result = insertTipSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({
+          message: "Please check your tip",
+          issues: result.error.issues.map((issue) => ({
+            field: issue.path.join("."),
+            message: issue.message,
+          })),
+        });
+      }
+
+      const existing = await storage.getUserTipFor(
+        req.session.userId!,
+        result.data.targetType,
+        result.data.targetId,
+      );
+      if (existing) {
+        return res.status(409).json({ message: "You have already left a tip here" });
+      }
+
+      await storage.createTip(req.session.userId!, result.data);
+      res.json({ message: "Thanks" });
+    } catch (error) {
+      console.error("Failed to create tip:", error);
+      res.status(500).json({ message: "Could not save your tip" });
+    }
+  });
+
+  // Admin only: hide a tip without deleting it, so moderation is reversible.
+  app.post("/api/tips/:id/hide", requireAdmin, async (req, res) => {
+    try {
+      const tip = await storage.setTipStatus(req.params.id, "hidden");
+      if (!tip) return res.status(404).json({ message: "Not found" });
+      res.json({ message: "Hidden" });
+    } catch (error) {
+      console.error("Failed to hide tip:", error);
+      res.status(500).json({ message: "Could not hide that tip" });
+    }
+  });
+
+  app.post("/api/tips/:id/show", requireAdmin, async (req, res) => {
+    try {
+      const tip = await storage.setTipStatus(req.params.id, "visible");
+      if (!tip) return res.status(404).json({ message: "Not found" });
+      res.json({ message: "Visible" });
+    } catch (error) {
+      console.error("Failed to show tip:", error);
+      res.status(500).json({ message: "Could not restore that tip" });
     }
   });
 

@@ -4,15 +4,26 @@ import { Link, useRoute } from "wouter";
 import { ArrowLeft, Baby, MapPin, Star, Utensils } from "lucide-react";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import TipsList from "@/components/TipsList";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSeo, toMetaDescription } from "@/lib/seo";
 import { apiRequest } from "@/lib/queryClient";
-import type { Attraction, Playground, Restaurant } from "@shared/schema";
+import type { Attraction, Playground, Restaurant, TipTargetType } from "@shared/schema";
 
 /** The three place types share a page; this describes how each one differs. */
 export type PlaceKind = "restaurants" | "attractions" | "playgrounds";
+
+/**
+ * Route segments are plural, tip targets are singular. Mapping them explicitly
+ * keeps a route rename from silently detaching a place's existing tips.
+ */
+const TIP_TARGET: Record<PlaceKind, TipTargetType> = {
+  restaurants: "restaurant",
+  attractions: "attraction",
+  playgrounds: "playground",
+};
 
 type Place = Restaurant | Attraction | Playground;
 
@@ -271,6 +282,8 @@ export default function PlacePage({ kind }: { kind: PlaceKind }) {
             <p className="text-neutral-600 leading-relaxed">{place.description}</p>
           </div>
         )}
+
+        <TipsList targetType={TIP_TARGET[kind]} targetId={place.id} />
       </article>
 
       <Footer />
